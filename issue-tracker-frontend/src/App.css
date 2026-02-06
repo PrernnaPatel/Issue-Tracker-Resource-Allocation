@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@keyframes rotate-y-180 {
+  from { transform: perspective(1000px) rotateY(0); }
+  to { transform: perspective(1000px) rotateY(180deg); }
+}
+
+@keyframes rotate-y-0 {
+  from { transform: perspective(1000px) rotateY(180deg); }
+  to { transform: perspective(1000px) rotateY(0); }
+}
+
+.rotate-y-180 {
+  animation: rotate-y-180 0.5s forwards;
+}
+
+.rotate-y-0 {
+  animation: rotate-y-0 0.5s forwards;
+}
+
+.-rotate-y-180 {
+  animation: rotate-y-180 0.5s reverse forwards;
+}
+
+.-rotate-y-0 {
+  animation: rotate-y-0 0.5s reverse forwards;
+}
