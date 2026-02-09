@@ -1,11 +1,14 @@
 import dotenv from "dotenv"
+import path from "path"
+import { fileURLToPath } from "url"
 import http from "http"
 import { Server } from "socket.io"
 import connectDB from "./database/database.js"
 import app from "./app.js"
 
-// Load environment variables
-dotenv.config()
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+// Load environment variables (works whether run from repo root or backend/)
+dotenv.config({ path: path.resolve(__dirname, "../.env") })
 
 // Connect to MongoDB
 connectDB()

@@ -1,10 +1,11 @@
-const API_URL ='http://localhost:5000/api/dept-admin';
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5001";
+const API_URL = `${API_BASE}/api/dept-admin`;
 
 const ALL_STATUSES = ['pending', 'in_progress', 'resolved', 'revoked'];
 
 // Inventory APIs (moved from inventoryService.js)
-const DEPT_API_URL = "http://localhost:5000/api/departmental-admin";
-const ADMIN_API_URL = "http://localhost:5000/api/admin";
+const DEPT_API_URL = `${API_BASE}/api/departmental-admin`;
+const ADMIN_API_URL = `${API_BASE}/api/admin`;
 
 export const getDeptAdminToken = () => {
   return localStorage.getItem('deptAdminToken');

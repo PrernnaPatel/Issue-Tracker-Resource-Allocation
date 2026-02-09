@@ -141,7 +141,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     console.log(`[Socket][${connectionId}] Creating new socket connection`);
-    const socket = io("http://localhost:5000", {
+    const socket = io(import.meta.env.VITE_API_URL || "http://localhost:5001", {
       transports: ["polling", "websocket"],
       withCredentials: true,
       timeout: 20000,

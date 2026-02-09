@@ -42,9 +42,10 @@ const DepartmentalAdmins = () => {
       ]);
       console.log('Fetched Departmental Admins:', adminsData);
       setDepartmentalAdmins(adminsData || []);
-      // Filter departments to only include those with canResolve set to true
-      const filteredDepartments = (departmentsData.depts || []).filter(dept => dept.canResolve);
-      setDepartments(filteredDepartments);
+      // Prefer departments that can resolve, but fall back to all if none are marked
+      const allDepartments = departmentsData.depts || [];
+      const resolvableDepartments = allDepartments.filter(dept => dept.canResolve);
+      setDepartments(resolvableDepartments.length ? resolvableDepartments : allDepartments);
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Failed to fetch data');

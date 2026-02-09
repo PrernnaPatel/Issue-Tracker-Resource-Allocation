@@ -1,10 +1,14 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import Admin from "../models/Admin.model.js";
 import connectDB from "../database/database.js";
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Load environment variables (works whether run from repo root or backend/)
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 const createAdmin = async () => {
   connectDB();

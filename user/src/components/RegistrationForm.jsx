@@ -163,8 +163,10 @@ const RegistrationForm = ({ onLoginClick }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    console.log("Register submit clicked", formData);
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) {
+      toast.error("Please fix the highlighted fields before registering.");
       setErrors(validationErrors);
       return;
     }
@@ -315,7 +317,7 @@ const RegistrationForm = ({ onLoginClick }) => {
             <p className="text-gray-600">Loading data...</p>
           )}
 
-          <div className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Full Name
@@ -552,18 +554,18 @@ const RegistrationForm = ({ onLoginClick }) => {
             )}
 
             <button
-              type="submit"
+              type="button"
               onClick={handleSubmit}
-              disabled={isSubmitting || isLoading}
+              disabled={isSubmitting}
               className={`w-full py-3 rounded-full font-medium transition-all ${
-                isSubmitting || isLoading
+                isSubmitting
                   ? "bg-gray-400 cursor-not-allowed text-white"
                   : "bg-[#4B2D87] text-white hover:bg-[#5E3A9F]"
               }`}
             >
               {isSubmitting ? "Creating account..." : "Register"}
             </button>
-          </div>
+          </form>
         </div>
       </div>
       <div className="text-center mt-4 pt-2 border-t border-gray-100">

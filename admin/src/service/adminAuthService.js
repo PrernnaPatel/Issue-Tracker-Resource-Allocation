@@ -1,4 +1,5 @@
-const API_URL = "http://localhost:5000/api/admin";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5001";
+const API_URL = `${API_BASE}/api/admin`;
 
 const ALL_STATUSES = ['pending', 'in_progress', 'resolved', 'revoked'];
 
@@ -506,7 +507,7 @@ export const getAvailableNetworkEngineerFloors = async () => {
   try {
     const token = localStorage.getItem('adminToken');
     if (!token) throw new Error('No authentication token found');
-    const response = await fetch('http://localhost:5000/api/admin/available-network-engineer-floors', {
+    const response = await fetch(`${API_URL}/available-network-engineer-floors`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
