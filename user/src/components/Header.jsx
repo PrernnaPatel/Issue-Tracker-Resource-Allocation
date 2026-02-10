@@ -14,6 +14,10 @@ const Header = ({ onMenuClick }) => {
   useEffect(() => {
     const fetchProfileImage = async () => {
       try {
+        if (!employee) {
+          setProfileImage(null);
+          return;
+        }
         const profileData = await getProfile();
         setProfileImage(profileData?.profile_image || null);
       } catch (error) {
@@ -22,7 +26,7 @@ const Header = ({ onMenuClick }) => {
     };
 
     fetchProfileImage();
-  }, []);
+  }, [employee]);
 
   useEffect(() => {
     if (!showNotifications) return;

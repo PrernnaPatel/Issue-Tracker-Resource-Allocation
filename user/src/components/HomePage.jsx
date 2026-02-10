@@ -27,8 +27,13 @@ export default function HomePage() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    if (!employee) {
+      setTickets([]);
+      setLoading(false);
+      return;
+    }
     fetchTickets();
-  }, []);
+  }, [employee]);
 
   const fetchTickets = async () => {
     try {
@@ -39,7 +44,9 @@ export default function HomePage() {
     } catch (error) {
       console.error('Error fetching tickets:', error);
       setError(error.message);
-      toast.error("Failed to fetch tickets.");
+      if (employee) {
+        toast.error("Failed to fetch tickets.");
+      }
     } finally {
       setLoading(false);
     }

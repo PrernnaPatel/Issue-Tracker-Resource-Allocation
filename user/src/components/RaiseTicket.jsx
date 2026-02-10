@@ -27,9 +27,13 @@ const RaiseTicket = () => {
       setLoading(true);
       try {
         const data = await getAllDepartments();
-        const resolvingDepartments = data.filter(
-          dept => dept && (dept._id || dept.id) && dept.name && dept.canResolve === true
-        );
+        const baseDepartments = Array.isArray(data)
+          ? data.filter(dept => dept && (dept._id || dept.id) && dept.name)
+          : [];
+        const hasResolveFlag = baseDepartments.some(dept => dept.canResolve === true);
+        const resolvingDepartments = hasResolveFlag
+          ? baseDepartments.filter(dept => dept.canResolve === true)
+          : baseDepartments;
         setDepartments(resolvingDepartments);
         if (resolvingDepartments.length === 0) {
           toast.warning('No departments available for ticket resolution');
@@ -382,7 +386,7 @@ const RaiseTicket = () => {
         
       </div>
 
-      <style jsx>{`
+      <style>{`
         .bg-grid-pattern {
           background-image: linear-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px),
             linear-gradient(90deg, rgba(0, 0, 0, 0.1) 1px, transparent 1px);

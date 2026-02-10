@@ -123,7 +123,8 @@ export const getMyTickets = async () => {
   try {
     const token = localStorage.getItem('token');
     if (!token) {
-      throw new Error('No authentication token found');
+      // Not authenticated; return empty list without error
+      return [];
     }
 
     const response = await fetch(`${API_URL}/my-tickets`, {
@@ -154,6 +155,9 @@ export const getMyTickets = async () => {
 export const getProfile = async () => {
   try {
     const token = localStorage.getItem("token");
+    if (!token) {
+      return null;
+    }
     const response = await fetch(`${API_URL}/get-profile`, {
       method: "GET",
       headers: {
