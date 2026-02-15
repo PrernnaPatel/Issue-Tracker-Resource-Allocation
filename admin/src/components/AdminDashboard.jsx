@@ -166,7 +166,7 @@ const AdminDashboard = () => {
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-gray-600 text-sm font-medium">{card.title}</h3>
+                <h3 className="text-black text-sm font-medium">{card.title}</h3>
                 <div className="flex items-center justify-between">
                   <span className="text-3xl font-bold text-gray-800">{card.value}</span>
                   <div className={`${card.iconColor} opacity-60`}>
@@ -178,13 +178,13 @@ const AdminDashboard = () => {
               {/* Mini preview of tickets */}
               <div className="mt-4 space-y-2 max-h-24 overflow-hidden">
                 {card.tickets.slice(0, 2).map((ticket, idx) => (
-                  <div key={idx} className="bg-gray-100 rounded-lg p-2 text-xs">
-                    <div className="text-gray-800 font-medium truncate">{ticket.title}</div>
-                    <div className="text-gray-500 truncate">{ticket.description}</div>
+                  <div key={idx} className="bg-white/80 rounded-lg p-2 text-xs">
+                    <div className="text-black font-medium truncate">{ticket.title}</div>
+                    <div className="text-black truncate">{ticket.description}</div>
                   </div>
                 ))}
                 {card.tickets.length > 2 && (
-                  <div className="text-xs text-gray-500 text-center">
+                  <div className="text-xs text-black text-center">
                     +{card.tickets.length - 2} more
                   </div>
                 )}
@@ -227,7 +227,7 @@ const AdminDashboard = () => {
                         className="bg-gray-50 border border-gray-200 rounded-lg p-3 hover:border-gray-400 transition-colors cursor-pointer group"
                       >
                         <div className="flex items-start justify-between mb-2">
-                          <h4 className="text-sm font-medium text-gray-800 truncate pr-2">
+                          <h4 className="text-sm font-medium text-black truncate pr-2">
                             {ticket.title}
                           </h4>
 
@@ -235,11 +235,11 @@ const AdminDashboard = () => {
                             <MoreHorizontal size={14} />
                           </button>
                         </div>
-                        <p className="text-xs text-gray-500 line-clamp-2 mb-2">
+                        <p className="text-xs text-black line-clamp-2 mb-2">
                           {ticket.description}
                         </p>
                         <div className="flex items-center justify-between">
-                          <span className="text-xs text-gray-500">
+                          <span className="text-xs text-black">
                             #{ticket._id.slice(-6)} {/* Display the last 6 characters of the ID */}
                           </span>
                           <div
@@ -250,7 +250,7 @@ const AdminDashboard = () => {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No tickets available</p>
+                  <p className="text-sm text-black">No tickets available</p>
                 )}
               </div>
             </div>

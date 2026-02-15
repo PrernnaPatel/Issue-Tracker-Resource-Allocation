@@ -57,6 +57,7 @@ const AdminSidebar = ({ isOpen, onClose }) => {
     { id: 'departments', label: 'Departments', icon: FileText, path: '/admin/departments' },
     { id: 'buildings', label: 'Buildings', icon: Building2, path: '/admin/buildings' },
     { id: 'dept-admins', label: 'Departmental Admins', icon: UserCog, path: '/admin/departmental-admins' },
+    { id: 'network-engineers', label: 'Network Engineers', icon: Shield, path: '/admin/network-engineers' },
     { id: 'reports', label: 'Reports', icon: BarChart3, path: '/admin/reports' },
     { id: 'component-sets', label: 'Component Sets', icon: Package, path: '/admin/component-sets' },
     { id: 'logs', label: 'Action Logs', icon: FileText, path: '/admin/logs' },

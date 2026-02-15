@@ -1,5 +1,7 @@
 import Department from "../models/Department.model.js";
 import Ticket from "../models/Ticket.model.js";
+import Employee from "../models/Employee.js";
+import DepartmentalAdmin from "../models/DepartmentalAdmin.model.js";
 import { logAction } from "../utils/logAction.js";
 
 //Add Department by Admin
@@ -43,12 +45,68 @@ export const addDepartment = async (req, res) => {
 //Send all Department to Employee/Admin
 export const sendDepartment = async (req, res) => {
   try {
-    const depts = await Department.find()
-      .select("_id name canResolve")
+    const allDepts = await Department.find()
+      .select("_id name description canResolve")
       .sort({ name: 1 });
-    return res.status(200).json({ depts });
+
+    // Network Engineer is a special operational role, not a visible business department.
+    const depts = allDepts.filter(
+      (dept) => dept.name?.toLowerCase() !== "network engineer"
+    );
+
+    const employeeCounts = await Employee.aggregate([
+      { $group: { _id: "$department", count: { $sum: 1 } } },
+    ]);
+    const employeeCountMap = new Map(
+      employeeCounts.map((item) => [String(item._id), item.count])
+    );
+
+    const departmentAdminCounts = await DepartmentalAdmin.aggregate([
+      { $group: { _id: "$department", count: { $sum: 1 } } },
+    ]);
+    const departmentAdminCountMap = new Map(
+      departmentAdminCounts.map((item) => [String(item._id), item.count])
+    );
+
+    const networkEngineerDept = allDepts.find(
+      (dept) => dept.name?.toLowerCase() === "network engineer"
+    );
+
+    let networkEngineerCountForIT = 0;
+    if (networkEngineerDept) {
+      const itDepartments = depts.filter((dept) =>
+        /^it(\s+department)?$/i.test(dept.name || "")
+      );
+      const itDepartmentIds = itDepartments.map((dept) => dept._id);
+
+      const itAdmins = await DepartmentalAdmin.find({
+        department: { $in: itDepartmentIds },
+      }).select("_id");
+      const itAdminIds = itAdmins.map((admin) => admin._id);
+
+      if (itAdminIds.length > 0) {
+        networkEngineerCountForIT = await DepartmentalAdmin.countDocuments({
+          department: networkEngineerDept._id,
+          itDepartmentAdmin: { $in: itAdminIds },
+        });
+      }
+    }
+
+    const enrichedDepartments = depts.map((dept) => {
+      const deptId = String(dept._id);
+      const isIT = /^it(\s+department)?$/i.test(dept.name || "");
+
+      return {
+        ...dept.toObject(),
+        employeeCount: employeeCountMap.get(deptId) || 0,
+        departmentAdminCount: departmentAdminCountMap.get(deptId) || 0,
+        networkEngineerCount: isIT ? networkEngineerCountForIT : 0,
+      };
+    });
+
+    return res.status(200).json({ depts: enrichedDepartments });
   } catch (e) {
-    console.error("Error fetching departments:", error);
+    console.error("Error fetching departments:", e);
     return res.status(500).json({ message: "Failed to fetch departments" });
   }
 };

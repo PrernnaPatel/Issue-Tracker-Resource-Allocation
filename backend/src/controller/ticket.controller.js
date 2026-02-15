@@ -44,11 +44,23 @@ export const raiseTicket = async (req, res) => {
       });
     }
 
+    const targetDepartmentName = to_department.toLowerCase().trim();
+    const isNetworkEngineerTarget = targetDepartmentName === "network engineer";
+    const isITTarget = /^it(\s+department)?$/i.test(to_department);
+
+    const networkEngineerDept = await Department.findOne({ name: /network engineer/i });
+
     let notificationRoom = "";
 
-    if (to_department.toLowerCase() === "network engineer") {
+    if (isNetworkEngineerTarget || isITTarget) {
+      if (!networkEngineerDept) {
+        return res.status(400).json({
+          message: "Network Engineer department is not configured.",
+        });
+      }
+
       const engineerExists = await DepartmentalAdmin.findOne({
-        department: toDept._id,
+        department: networkEngineerDept._id,
         locations: {
           $elemMatch: {
             building: employee.building._id,
@@ -124,12 +136,15 @@ export const raiseTicket = async (req, res) => {
         from: employee.name || "Unknown",
         raisedAt: new Date().toLocaleString(),
       };
-      if (to_department.toLowerCase() === "network engineer") {
+      if (isNetworkEngineerTarget) {
         io.to(`network-${employee.building._id}-${employee.floor}`).emit(
           "new-ticket",
           payload
         );
         io.to(`department-network engineer`).emit("new-ticket", payload);
+      } else if (isITTarget) {
+        io.to(`department-${to_department.toLowerCase()}`).emit("new-ticket", payload);
+        io.to(notificationRoom).emit("new-ticket", payload);
       } else {
         io.to(`department-${to_department.toLowerCase()}`).emit(
           "new-ticket",
@@ -286,6 +301,24 @@ export const updateMyTicket = async (req, res) => {
         );
         const room = `network-${employee.building._id}-${employee.floor}`;
         io.to(room).emit("ticket-updated", {
+          ticketId: ticket._id,
+          title: ticket.title,
+          message: `Ticket "${ticket.title}" has been updated by the employee.`,
+        });
+      } else if (/^it(\s+department)?$/i.test(deptName || "")) {
+        const employee = await Employee.findById(employeeId).populate(
+          "building"
+        );
+        const networkRoom = `network-${employee.building._id}-${employee.floor}`;
+        const departmentRoom = `department-${deptName}`;
+
+        io.to(networkRoom).emit("ticket-updated", {
+          ticketId: ticket._id,
+          title: ticket.title,
+          message: `Ticket "${ticket.title}" has been updated by the employee.`,
+        });
+
+        io.to(departmentRoom).emit("ticket-updated", {
           ticketId: ticket._id,
           title: ticket.title,
           message: `Ticket "${ticket.title}" has been updated by the employee.`,
@@ -453,6 +486,24 @@ export const revokeTicket = async (req, res) => {
           title: ticket.title,
           message: `Ticket titled "${ticket.title}" has been revoked by the employee.`,
         });
+      } else if (/^it(\s+department)?$/i.test(deptName || "")) {
+        const employee = await Employee.findById(employeeId).populate(
+          "building"
+        );
+        const networkRoom = `network-${employee.building._id}-${employee.floor}`;
+        const departmentRoom = `department-${deptName}`;
+
+        io.to(networkRoom).emit("ticket-revoked", {
+          ticketId: ticket._id,
+          title: ticket.title,
+          message: `Ticket titled "${ticket.title}" has been revoked by the employee.`,
+        });
+
+        io.to(departmentRoom).emit("ticket-revoked", {
+          ticketId: ticket._id,
+          title: ticket.title,
+          message: `Ticket titled "${ticket.title}" has been revoked by the employee.`,
+        });
       } else if (deptName) {
         const room = `department-${deptName}`;
         io.to(room).emit("ticket-revoked", {
@@ -550,6 +601,19 @@ export const commentOnMyTicket = async (req, res) => {
         employeeName: req.user.name || "Unknown Employee",
       });
 
+      if (/^it(\s+department)?$/i.test(departmentName)) {
+        const employee = await Employee.findById(employeeId).populate("building");
+        if (employee?.building && employee.floor !== undefined) {
+          const networkRoom = `network-${employee.building._id}-${employee.floor}`;
+          io.to(networkRoom).emit("new-comment", {
+            ticketId: ticket.ticket_id || ticket._id,
+            comment: newComment,
+            title: ticket.title,
+            employeeName: req.user.name || "Unknown Employee",
+          });
+        }
+      }
+
       console.log(`Notification sent to: ${departmentRoom}`);
     }
 
@@ -618,9 +682,31 @@ export const getUnreadTicketUpdates = async (req, res) => {
   const { id: adminId, department: deptName } = req.user;
 
   try {
-    const department = await Department.findOne({ name: deptName });
-    if (!department) {
+    const isNetworkEngineer = deptName?.toLowerCase() === "network engineer";
+    const scopedDepartment = isNetworkEngineer
+      ? await Department.findOne({ name: /^it(\s+department)?$/i })
+      : await Department.findOne({ name: deptName });
+
+    if (!scopedDepartment) {
       return res.status(404).json({ message: "Department not found" });
+    }
+
+    let locationEmployeeIds = null;
+
+    if (isNetworkEngineer) {
+      const engineer = await DepartmentalAdmin.findById(adminId);
+      if (!engineer || !Array.isArray(engineer.locations) || engineer.locations.length === 0) {
+        return res.status(400).json({ message: "Network Engineer locations not assigned." });
+      }
+
+      const locationFilters = engineer.locations.map((loc) => ({
+        building: loc.building,
+        floor: loc.floor,
+        lab_no: { $in: loc.labs },
+      }));
+
+      const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
+      locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
     }
 
     // Get tickets assigned to this admin or department
@@ -628,7 +714,8 @@ export const getUnreadTicketUpdates = async (req, res) => {
       $or: [
         { assigned_to: adminId },
         {
-          to_department: department._id,
+          to_department: scopedDepartment._id,
+          ...(isNetworkEngineer && { raised_by: { $in: locationEmployeeIds } }),
           status: { $in: ["pending", "in_progress"] },
         },
       ],

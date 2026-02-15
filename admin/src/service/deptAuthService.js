@@ -7,21 +7,46 @@ const ALL_STATUSES = ['pending', 'in_progress', 'resolved', 'revoked'];
 const DEPT_API_URL = `${API_BASE}/api/departmental-admin`;
 const ADMIN_API_URL = `${API_BASE}/api/admin`;
 
+const TOKEN_KEY = "deptAdminToken";
+const DATA_KEY = "deptAdminData";
+
 export const getDeptAdminToken = () => {
-  return localStorage.getItem('deptAdminToken');
+  const sessionToken = sessionStorage.getItem(TOKEN_KEY);
+  if (sessionToken) return sessionToken;
+
+  // Backward compatibility: migrate old localStorage token to sessionStorage.
+  const legacyToken = localStorage.getItem(TOKEN_KEY);
+  if (legacyToken) {
+    sessionStorage.setItem(TOKEN_KEY, legacyToken);
+    localStorage.removeItem(TOKEN_KEY);
+    return legacyToken;
+  }
+  return null;
 };
 
 export const getDeptAdminData = () => {
-  const data = localStorage.getItem('deptAdminData');
-  return data ? JSON.parse(data) : null;
+  const sessionData = sessionStorage.getItem(DATA_KEY);
+  if (sessionData) return JSON.parse(sessionData);
+
+  // Backward compatibility: migrate old localStorage data to sessionStorage.
+  const legacyData = localStorage.getItem(DATA_KEY);
+  if (legacyData) {
+    sessionStorage.setItem(DATA_KEY, legacyData);
+    localStorage.removeItem(DATA_KEY);
+    return JSON.parse(legacyData);
+  }
+  return null;
 };
 
 export const setDeptAdminToken = (token) => {
-  localStorage.setItem('deptAdminToken', token);
+  sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.removeItem(TOKEN_KEY);
 };
 
 export const setDeptAdminData = (data) => {
-  localStorage.setItem('deptAdminData', JSON.stringify(data));
+  const serializedData = JSON.stringify(data);
+  sessionStorage.setItem(DATA_KEY, serializedData);
+  localStorage.removeItem(DATA_KEY);
 };
 
 export const deptAdminLoginRequest = async (email, password) => {
@@ -236,6 +261,37 @@ export const getLoggedInDepartmentalAdmin = async () => {
     success: true,
     data: data,
     message: 'Departmental admin data fetched successfully'
+  };
+};
+
+export const getNetworkEngineersForDeptAdmin = async () => {
+  const token = getDeptAdminToken();
+  if (!token) {
+    return {
+      success: false,
+      message: "Authentication token not found",
+    };
+  }
+
+  const response = await fetch(`${API_URL}/network-engineers`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    return {
+      success: false,
+      message: data.message || "Failed to fetch network engineers",
+    };
+  }
+
+  return {
+    success: true,
+    engineers: data.engineers || [],
+    message: "Network engineers fetched successfully",
   };
 };
 

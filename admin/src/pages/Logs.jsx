@@ -9,6 +9,15 @@ const actionLabels = {
   BULK_DELETE: 'Bulk Delete',
   EXPORT: 'Export',
   LOGIN: 'Login',
+  LOGIN_OTP_REQUEST: 'Login OTP Request',
+  LOGIN_SUCCESS: 'Login Success',
+  FAILED_LOGIN: 'Failed Login',
+  OTP_LOCKOUT: 'OTP Lockout',
+  PASSWORD_CHANGED: 'Password Changed',
+  FETCH_PROFILE: 'Fetch Profile',
+  VIEW_TICKETS: 'View Tickets',
+  TICKET_STATUS_UPDATE: 'Ticket Status Update',
+  TICKET_COMMENT_ADDED: 'Ticket Comment Added',
 };
 
 const Logs = () => {

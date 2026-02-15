@@ -437,20 +437,26 @@ export const exportDepartmentalReport = async (req, res) => {
     const ticketQuery = {};
     let filtersApplied = [`Department: ${departmentName}`];
 
-    const department = await Department.findOne({ name: departmentName });
-    ticketQuery.to_department = department._id;
+    const isNetworkEngineer = departmentName.toLowerCase() === "network engineer";
+    const scopedDepartment = isNetworkEngineer
+      ? await Department.findOne({ name: /^it(\s+department)?$/i })
+      : await Department.findOne({ name: departmentName });
 
-    if (departmentName.toLowerCase() === "network engineer") {
-      const assignedFloors = admin.locations.map((loc) => ({
+    if (!scopedDepartment) {
+      return res.status(400).json({ message: "Department not found." });
+    }
+
+    ticketQuery.to_department = scopedDepartment._id;
+
+    if (isNetworkEngineer) {
+      const assignedLocations = admin.locations.map((loc) => ({
         building: loc.building.toString(),
         floor: loc.floor,
+        lab_no: { $in: loc.labs || [] },
       }));
 
       const allEmployeeIds = await Employee.find({
-        $or: assignedFloors.map((loc) => ({
-          building: loc.building,
-          floor: loc.floor,
-        })),
+        $or: assignedLocations,
       }).distinct("_id");
 
       ticketQuery.raised_by = { $in: allEmployeeIds };
@@ -675,7 +681,18 @@ export const exportDeptAdminTicketReportExcel = async (req, res) => {
       return res.status(403).json({ message: "Access denied. No department linked." });
     }
 
-    const ticketQuery = { to_department: deptAdmin.department._id };
+    const isNetworkEngineer =
+      deptAdmin.department.name.toLowerCase() === "network engineer";
+
+    const scopedDepartment = isNetworkEngineer
+      ? await Department.findOne({ name: /^it(\s+department)?$/i })
+      : await Department.findById(deptAdmin.department._id);
+
+    if (!scopedDepartment) {
+      return res.status(400).json({ message: "Department not found." });
+    }
+
+    const ticketQuery = { to_department: scopedDepartment._id };
     if (startDate || endDate) {
       ticketQuery.createdAt = {};
       if (startDate) ticketQuery.createdAt.$gte = new Date(startDate);
@@ -699,17 +716,20 @@ export const exportDeptAdminTicketReportExcel = async (req, res) => {
       }
     }
 
-    if (deptAdmin.department.name.toLowerCase() === "network engineer") {
+    if (isNetworkEngineer) {
       const allowed = deptAdmin.locations || [];
       allTickets = allTickets.filter((ticket) => {
         const raised = ticket.raised_by;
-        if (!raised || !raised.building || raised.floor === undefined) return false;
+        if (!raised || !raised.building || raised.floor === undefined || !raised.lab_no) return false;
         const buildingId =
           typeof raised.building === "object" && raised.building._id
             ? raised.building._id.toString()
             : raised.building.toString();
         return allowed.some(
-          (loc) => buildingId === loc.building.toString() && raised.floor === loc.floor
+          (loc) =>
+            buildingId === loc.building.toString() &&
+            raised.floor === loc.floor &&
+            (loc.labs || []).includes(raised.lab_no)
         );
       });
     }

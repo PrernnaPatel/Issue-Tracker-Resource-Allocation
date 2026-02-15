@@ -12,6 +12,9 @@ import { Building } from "../models/Building.model.js";
 import Department from "../models/Department.model.js";
 import { logAction } from "../utils/logAction.js";
 
+const otpDeliveryMode = (process.env.OTP_DELIVERY || "email").toLowerCase();
+const shouldPrintOtp = otpDeliveryMode === "console" || otpDeliveryMode === "both";
+
 const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MIN = 15;
 
@@ -151,6 +154,10 @@ export const loginRequestOtp = async (req, res) => {
         .format("YYYY-MM-DD");
 
       if (otpCreatedDate === todayDateIST) {
+        if (shouldPrintOtp) {
+          console.log(`[OTP:LOGIN] email=${email} otp=${existingOtp.otp}`);
+        }
+
         // Reuse today's OTP
         return res.status(200).json({
           message: "Use the OTP sent to your mail",

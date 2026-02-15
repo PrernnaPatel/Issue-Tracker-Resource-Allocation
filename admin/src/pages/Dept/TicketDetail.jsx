@@ -8,9 +8,14 @@ import { useNotifications } from '../../context/NotificationContext';
 
 const TicketDetail = () => {
   const { ticketId } = useParams();
-  const { token } = useDeptAuth();
+  const { token, deptAdmin } = useDeptAuth();
   const { refreshUnreadTickets } = useNotifications();
   const adminId = getIdFromToken(token);
+  const departmentName =
+    typeof deptAdmin?.department === 'object'
+      ? deptAdmin?.department?.name
+      : deptAdmin?.department;
+  const isWatchOnlyDepartment = /^it(\s+department)?$/i.test(departmentName || '');
   const [ticket, setTicket] = useState(null);
   const [loading, setLoading] = useState(true);
   const [attachmentUrl, setAttachmentUrl] = useState(null);
@@ -548,7 +553,7 @@ const TicketDetail = () => {
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions</h3>
             <div className="flex flex-col md:flex-row flex-wrap gap-4">
               {/* Status Update Form */}
-              {ticket.status !== 'resolved' && ticket.status !== 'revoked' && (
+              {!isWatchOnlyDepartment && ticket.status !== 'resolved' && ticket.status !== 'revoked' && (
                 <>
                   {/* Restrict status change for in_progress tickets to only if assigned_to matches adminId from token */}
                   {ticket.status === 'in_progress' && adminId && (String(ticket.assigned_to) !== String(adminId)) ? (
@@ -602,33 +607,42 @@ const TicketDetail = () => {
                 </>
               )}
               {/* Add Comment Form */}
-              <form onSubmit={handleAddComment} className="flex items-center gap-2 w-full md:w-auto">
-                <input
-                  type="text"
-                  value={comment}
-                  onChange={e => setComment(e.target.value)}
-                  placeholder="Add a comment..."
-                  disabled={ticket.status === 'revoked' || statusUpdating}
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent"
-                />
-                <input
-                  type="file"
-                  accept="image/*,application/pdf"
-                  onChange={e => setCommentAttachment(e.target.files[0] || null)}
-                  className="block text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-gray-100 file:text-gray-700 mt-2"
-                />
-                <button
-                  type="submit"
-                  disabled={ticket.status === 'revoked' || statusUpdating || !comment.trim()}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
-                    ticket.status === 'revoked' || statusUpdating || !comment.trim()
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                      : 'bg-purple-500 text-white hover:bg-purple-600'
-                  }`}
-                >
-                  {statusUpdating ? 'Adding...' : 'Add Comment'}
-                </button>
-              </form>
+              {!isWatchOnlyDepartment && (
+                <form onSubmit={handleAddComment} className="flex items-center gap-2 w-full md:w-auto">
+                  <input
+                    type="text"
+                    value={comment}
+                    onChange={e => setComment(e.target.value)}
+                    placeholder="Add a comment..."
+                    disabled={ticket.status === 'revoked' || statusUpdating}
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent"
+                  />
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={e => setCommentAttachment(e.target.files[0] || null)}
+                    className="block text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-gray-100 file:text-gray-700 mt-2"
+                  />
+                  <button
+                    type="submit"
+                    disabled={ticket.status === 'revoked' || statusUpdating || !comment.trim()}
+                    className={`px-4 py-2 rounded-lg transition-colors ${
+                      ticket.status === 'revoked' || statusUpdating || !comment.trim()
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-purple-500 text-white hover:bg-purple-600'
+                    }`}
+                  >
+                    {statusUpdating ? 'Adding...' : 'Add Comment'}
+                  </button>
+                </form>
+              )}
+              {isWatchOnlyDepartment && (
+                <div className="w-full mt-1 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-sm text-blue-800">
+                    <strong>Watch-only:</strong> IT departmental admins can view ticket activity. Network engineers handle status updates and comments.
+                  </p>
+                </div>
+              )}
               {ticket.status === 'revoked' && (
                 <div className="w-full mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                   <p className="text-sm text-yellow-800">

@@ -15,11 +15,13 @@ import Departments from './pages/Departments';
 import Building from './pages/Buildings';
 import Reports from './pages/Reports';
 import DepartmentalAdmins from './pages/DepartmentalAdmins';
+import NetworkEngineers from './pages/NetworkEngineers';
 import TicketDetail from './pages/TicketDetail';
 import AdminLayout from './layout/AdminLayout';
 import DeptDashboard from './pages/Dept/Dashboard';
 import DepartmentTickets from './pages/Dept/Tickets';
 import DeptReports from './pages/Dept/Reports';
+import DeptNetworkEngineers from './pages/Dept/NetworkEngineers';
 import DepartmentTicketDetail from './pages/Dept/TicketDetail';
 import TicketAssigned from './pages/Dept/TicketAssigned';
 import DepartmentLayout from './layout/DepartmentLayout';
@@ -46,6 +48,7 @@ const AdminRoutes = () => {
             <Route path="/reports" element={<Reports />} />
             <Route path="/buildings" element={<Building />} />
             <Route path="/departmental-admins" element={<DepartmentalAdmins />} />
+            <Route path="/network-engineers" element={<NetworkEngineers />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/tickets/:ticketId" element={<TicketDetail />} />
             <Route path="/admin/inventory/:id" element={<InventoryDetail />} />
@@ -138,6 +141,10 @@ const App = () => {
           <Route
             path="reports"
             element={<DeptReports />}
+          />
+          <Route
+            path="network-engineers"
+            element={<DeptNetworkEngineers />}
           />
           <Route
             path="ticket-assigned"

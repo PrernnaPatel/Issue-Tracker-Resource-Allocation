@@ -15,6 +15,11 @@ const departmentalAdminSchema = mongoose.Schema(
       ref: "Department",
       required: true,
     },
+    itDepartmentAdmin: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DepartmentalAdmin",
+      default: null,
+    },
     password: {
       type: String,
     },

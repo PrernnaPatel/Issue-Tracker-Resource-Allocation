@@ -65,6 +65,26 @@ const DepartmentAdminSidebar = ({ isOpen, onClose }) => {
            departmentName.toLowerCase().includes('network engineer');
   };
 
+  const hasNetworkEngineerAccess = () => {
+    if (!deptAdmin?.department) return false;
+
+    const departmentName = typeof deptAdmin.department === 'object'
+      ? deptAdmin.department.name
+      : deptAdmin.department;
+
+    return /^it(\s+department)?$/i.test(departmentName || '');
+  };
+
+  const getSidebarTitle = () => {
+    if (!deptAdmin?.department) return 'Dept Admin';
+    const departmentName = typeof deptAdmin.department === 'object'
+      ? deptAdmin.department.name
+      : deptAdmin.department;
+    return departmentName?.toLowerCase().includes('network engineer')
+      ? 'Network Engineer'
+      : 'Dept Admin';
+  };
+
   // Calculate assigned unread tickets for this admin
   const assignedUnreadCount = unreadTickets && deptAdmin && deptAdmin._id
     ? unreadTickets.filter(
@@ -91,6 +111,7 @@ const DepartmentAdminSidebar = ({ isOpen, onClose }) => {
       badge: assignedUnreadCount > 0 ? assignedUnreadCount : null
     },
     { id: 'reports', label: 'Reports', icon: FileText, path: '/dept/reports' },
+    ...(hasNetworkEngineerAccess() ? [{ id: 'network-engineers', label: 'Network Engineers', icon: Users, path: '/dept/network-engineers' }] : []),
     // Conditionally show inventory based on department access
     ...(hasInventoryAccess() ? [{ id: 'inventory', label: 'Inventory', icon: Package, path: '/dept/inventory' }] : []),
     {
@@ -127,7 +148,7 @@ const DepartmentAdminSidebar = ({ isOpen, onClose }) => {
             <div className="w-8 h-8 bg-gradient-to-r from-blue-400 to-cyan-500 rounded-lg flex items-center justify-center">
               <Building2 size={20} className="text-white"/>
             </div>
-            <span className="text-xl font-bold text-gray-800">Dept Admin</span>
+            <span className="text-xl font-bold text-gray-800">{getSidebarTitle()}</span>
           </div>
         </div>
 

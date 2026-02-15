@@ -14,6 +14,26 @@ import { Building } from "../models/Building.model.js";
 import { updateBuilding } from "./admin.controller.js";
 import { logAction } from "../utils/logAction.js";
 
+const otpDeliveryMode = (process.env.OTP_DELIVERY || "email").toLowerCase();
+const shouldPrintOtp = otpDeliveryMode === "console" || otpDeliveryMode === "both";
+
+const NETWORK_ENGINEER_DEPARTMENT_NAME = "network engineer";
+const IT_DEPARTMENT_REGEX = /^it(\s+department)?$/i;
+
+const isNetworkEngineerDepartment = (departmentName = "") =>
+  departmentName.toLowerCase().trim() === NETWORK_ENGINEER_DEPARTMENT_NAME;
+
+const isITDepartment = (departmentName = "") =>
+  IT_DEPARTMENT_REGEX.test(departmentName.trim());
+
+const getTicketScopeDepartment = async (departmentName) => {
+  if (isNetworkEngineerDepartment(departmentName)) {
+    return Department.findOne({ name: IT_DEPARTMENT_REGEX });
+  }
+
+  return Department.findOne({ name: departmentName });
+};
+
 export const deptAdminLoginRequestOtp = async (req, res) => {
   const { email, password } = req.body;
 
@@ -62,6 +82,10 @@ export const deptAdminLoginRequestOtp = async (req, res) => {
         .format("YYYY-MM-DD");
 
       if (otpCreatedDate === todayDateIST) {
+        if (shouldPrintOtp) {
+          console.log(`[OTP:LOGIN] email=${email} otp=${existingOtp.otp}`);
+        }
+
         // Reuse today's OTP
         return res.status(200).json({
           message: "Use the OTP sent to your mail",
@@ -316,16 +340,66 @@ export const getLoggedInDepartmentalAdmin = async (req, res) => {
   }
 };
 
+export const getNetworkEngineersForDeptAdmin = async (req, res) => {
+  try {
+    const { id: adminId } = req.user;
+
+    const currentAdmin = await DepartmentalAdmin.findById(adminId).populate(
+      "department",
+      "name"
+    );
+    if (!currentAdmin || !currentAdmin.department) {
+      return res.status(404).json({ message: "Departmental admin not found." });
+    }
+
+    const isITAdmin = /^it(\s+department)?$/i.test(
+      currentAdmin.department.name || ""
+    );
+
+    if (!isITAdmin) {
+      return res.status(403).json({
+        message: "Only IT departmental admins can view network engineers.",
+      });
+    }
+
+    const networkEngineerDepartment = await Department.findOne({
+      name: /^network engineer$/i,
+    });
+
+    if (!networkEngineerDepartment) {
+      return res.status(200).json({ engineers: [] });
+    }
+
+    const engineers = await DepartmentalAdmin.find({
+      department: networkEngineerDepartment._id,
+      itDepartmentAdmin: adminId,
+    })
+      .populate("department", "name")
+      .populate("itDepartmentAdmin", "name email")
+      .populate("locations.building", "name")
+      .select("-password")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({ engineers });
+  } catch (error) {
+    console.error("Error fetching network engineers for dept admin:", error);
+    return res.status(500).json({
+      message: "Failed to fetch network engineers.",
+      error: error.message,
+    });
+  }
+};
+
 //Fetch the tickets for each department
 export const getDepartmentTickets = async (req, res) => {
   try {
     const { department: departmentName, role, id } = req.user;
-    const department = await Department.findOne({ name: departmentName });
-    if (!department) {
+    const scopedDepartment = await getTicketScopeDepartment(departmentName);
+    if (!scopedDepartment) {
       return res.status(404).json({ message: "Department not found." });
     }
 
-    let query = { to_department: department._id };
+    let query = { to_department: scopedDepartment._id };
 
     // Special logic for network engineers with locations
     if (
@@ -365,7 +439,7 @@ export const getDepartmentTickets = async (req, res) => {
     await logAction({
       action: "VIEW_TICKETS",
       performedBy: req.user.id,
-      description: `Fetched tickets for department ${departmentName}.`,
+      description: `Fetched tickets for department ${scopedDepartment.name} (${departmentName} view).`,
     });
 
     return res.status(200).json({ tickets });
@@ -390,6 +464,29 @@ export const updateTicketStatus = async (req, res) => {
   }
 
   try {
+    const adminRecord = await DepartmentalAdmin.findById(adminId).populate("department");
+    if (!adminRecord || !adminRecord.department) {
+      return res.status(404).json({ message: "Departmental admin not found." });
+    }
+
+    const adminDepartmentName = adminRecord.department.name;
+    const hasNetworkAssignments =
+      Array.isArray(adminRecord.locations) && adminRecord.locations.length > 0;
+    const isNetworkEngineerActor =
+      isNetworkEngineerDepartment(adminDepartmentName) || hasNetworkAssignments;
+
+    if (isITDepartment(adminDepartmentName) && !isNetworkEngineerActor) {
+      return res.status(403).json({
+        message:
+          "IT departmental admins are in watch-only mode. Network engineers handle ticket updates.",
+      });
+    }
+
+    const scopedDepartment = await getTicketScopeDepartment(adminDeptName);
+    if (!scopedDepartment) {
+      return res.status(404).json({ message: "Department not found." });
+    }
+
     const ticket = await Ticket.findById(ticketId).populate(
       "to_department raised_by"
     );
@@ -398,10 +495,30 @@ export const updateTicketStatus = async (req, res) => {
       return res.status(404).json({ message: "Ticket not found." });
     }
 
-    if (ticket.to_department?.name !== adminDeptName) {
+    if (String(ticket.to_department?._id) !== String(scopedDepartment._id)) {
       return res.status(403).json({
-        message: `This ticket does not belong to your department ${adminDeptName}.`,
+        message: `This ticket does not belong to your allowed department scope (${scopedDepartment.name}).`,
       });
+    }
+
+    if (isNetworkEngineerActor) {
+      const raisedBy = ticket.raised_by;
+      const hasLocationAccess =
+        raisedBy &&
+        adminRecord.locations.some((loc) => {
+          const sameBuilding =
+            String(loc.building) === String(raisedBy.building);
+          const sameFloor = Number(loc.floor) === Number(raisedBy.floor);
+          const sameLab = (loc.labs || []).includes(raisedBy.lab_no);
+          return sameBuilding && sameFloor && sameLab;
+        });
+
+      if (!hasLocationAccess) {
+        return res.status(403).json({
+          message:
+            "You are not authorized to update this ticket because it is outside your assigned locations.",
+        });
+      }
     }
 
     const currentStatus = ticket.status;

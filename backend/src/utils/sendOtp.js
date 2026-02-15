@@ -2,27 +2,50 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 dotenv.config();
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+const otpDeliveryMode = (process.env.OTP_DELIVERY || "email").toLowerCase();
 
-const now=new Date()
-const midnight=new Date(now)
-midnight.setHours(24,0,0,0)
-const formattedMidnight=midnight.toLocaleString("en-IN",{
-  day:"numeric",
-  month:"long",
-  year:"numeric",
-  hour:"numeric",
-  minute:"2-digit",
-  hour12:true,
-})
+const shouldPrintOtp = otpDeliveryMode === "console" || otpDeliveryMode === "both";
+const shouldSendEmail = otpDeliveryMode === "email" || otpDeliveryMode === "both";
+
+const transporter = shouldSendEmail
+  ? nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    })
+  : null;
+
+const getFormattedMidnight = () => {
+  const now = new Date();
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  return midnight.toLocaleString("en-IN", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
+const logOtpToTerminal = ({ type, email, otp }) => {
+  console.log(`[OTP:${type}] email=${email} otp=${otp}`);
+};
 
 export const sendOtp = async (email, otp) => {
+  if (shouldPrintOtp) {
+    logOtpToTerminal({ type: "LOGIN", email, otp });
+  }
+
+  if (!shouldSendEmail) {
+    return;
+  }
+
+  const formattedMidnight = getFormattedMidnight();
+
   await transporter.sendMail({
     from: `"Issue Tracker Team" <${process.env.EMAIL_USER}>`,
     to: email,
@@ -41,6 +64,14 @@ export const sendOtp = async (email, otp) => {
 };
 
 export const forgotPassOtp = async (email, otp) => {
+  if (shouldPrintOtp) {
+    logOtpToTerminal({ type: "FORGOT_PASSWORD", email, otp });
+  }
+
+  if (!shouldSendEmail) {
+    return;
+  }
+
   await transporter.sendMail({
     from: `"Issue Tracker Team" <${process.env.EMAIL_USER}>`,
     to: email,

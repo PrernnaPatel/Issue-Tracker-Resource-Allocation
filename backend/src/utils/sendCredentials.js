@@ -2,6 +2,11 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 dotenv.config();
 
+const otpDeliveryMode = (process.env.OTP_DELIVERY || "email").toLowerCase();
+
+const shouldPrintOtp = otpDeliveryMode === "console" || otpDeliveryMode === "both";
+const shouldSendEmail = otpDeliveryMode === "email" || otpDeliveryMode === "both";
+
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -37,6 +42,14 @@ export const sendCredentialsEmail = async ({
 };
 
 export const sendOtpOnce = async (email, otp) => {
+  if (shouldPrintOtp) {
+    console.log(`[OTP:FIRST_LOGIN] email=${email} otp=${otp}`);
+  }
+
+  if (!shouldSendEmail) {
+    return;
+  }
+
   await transporter.sendMail({
     from: `"Issue Tracker Team" <${process.env.EMAIL_USER}>`,
     to: email,

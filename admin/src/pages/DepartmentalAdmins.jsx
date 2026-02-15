@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react';
-import { UserCog, Search, Plus, Mail, X, MapPin } from 'lucide-react';
-import { createDepartmentalAdmin, getAllDepartments, getAllDepartmentalAdmins, getAvailableNetworkEngineerFloors, updateNetworkEngineerLocations } from '../service/adminAuthService';
+import { Search, Plus, X, Pencil, Trash2, Eye } from 'lucide-react';
+import { createDepartmentalAdmin, deleteDepartmentalAdmin, getAllDepartments, getAllDepartmentalAdmins, getAvailableNetworkEngineerFloors, getDepartmentLocations, updateDepartmentalAdmin, updateNetworkEngineerLocations } from '../service/adminAuthService';
 import { toast } from 'react-toastify';
+import { useSearchParams } from 'react-router-dom';
 
-const DepartmentalAdmins = () => {
+const ALL_FLOORS_VALUE = '__ALL_FLOORS__';
+
+const DepartmentalAdmins = ({ networkOnly = false }) => {
+  const [searchParams] = useSearchParams();
   const [departmentalAdmins, setDepartmentalAdmins] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -11,7 +15,7 @@ const DepartmentalAdmins = () => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    department: ''
+    department: networkOnly ? 'Network Engineer' : ''
   });
   const [availableAssignments, setAvailableAssignments] = useState([]);
   const [selectedBuilding, setSelectedBuilding] = useState('');
@@ -28,10 +32,33 @@ const DepartmentalAdmins = () => {
   const [editSelectedLabs, setEditSelectedLabs] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
+  const [showAdminEditModal, setShowAdminEditModal] = useState(false);
+  const [viewAdminModal, setViewAdminModal] = useState({ open: false, admin: null });
+  const [isUpdatingAdmin, setIsUpdatingAdmin] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    id: '',
+    name: '',
+    email: '',
+    department: ''
+  });
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [networkOnly]);
+
+  useEffect(() => {
+    const preselectedDepartment = searchParams.get('department');
+    if (preselectedDepartment && !networkOnly) {
+      setDepartmentFilter(preselectedDepartment);
+    }
+  }, [searchParams, networkOnly]);
+
+  const getNetworkEngineerDepartmentName = (allDepartments = departments) => {
+    const match = allDepartments.find((dept) =>
+      dept.name?.toLowerCase().includes('network engineer')
+    );
+    return match?.name || 'Network Engineer';
+  };
 
   const fetchData = async () => {
     try {
@@ -45,7 +72,25 @@ const DepartmentalAdmins = () => {
       // Prefer departments that can resolve, but fall back to all if none are marked
       const allDepartments = departmentsData.depts || [];
       const resolvableDepartments = allDepartments.filter(dept => dept.canResolve);
-      setDepartments(resolvableDepartments.length ? resolvableDepartments : allDepartments);
+      let selectedDepartments = resolvableDepartments.length ? resolvableDepartments : allDepartments;
+      if (!networkOnly) {
+        selectedDepartments = selectedDepartments.filter(
+          (dept) => !dept.name?.toLowerCase().includes('network engineer')
+        );
+      }
+      setDepartments(selectedDepartments);
+
+      if (networkOnly) {
+        const networkDeptName = getNetworkEngineerDepartmentName(selectedDepartments);
+        setFormData((prev) => ({ ...prev, department: networkDeptName }));
+
+        try {
+          const assignments = await getAvailableNetworkEngineerFloors();
+          setAvailableAssignments(assignments);
+        } catch {
+          setAvailableAssignments([]);
+        }
+      }
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Failed to fetch data');
@@ -57,6 +102,15 @@ const DepartmentalAdmins = () => {
   const handleDepartmentChange = async (e) => {
     const value = e.target.value;
     setFormData(prev => ({ ...prev, department: value }));
+    if (!value) {
+      setAvailableAssignments([]);
+      setSelectedBuilding('');
+      setSelectedFloor('');
+      setSelectedLabs([]);
+      setBuildingAssignments([]);
+      return;
+    }
+
     if (value.toLowerCase().includes('network engineer')) {
       try {
         const assignments = await getAvailableNetworkEngineerFloors();
@@ -75,6 +129,25 @@ const DepartmentalAdmins = () => {
       setSelectedFloor('');
       setSelectedLabs([]);
       setBuildingAssignments([]);
+      return;
+    }
+
+    try {
+      const selectedDepartment = departments.find((dept) => dept.name === value);
+      if (!selectedDepartment?._id) {
+        setAvailableAssignments([]);
+        return;
+      }
+
+      const assignments = await getDepartmentLocations(selectedDepartment._id);
+      setAvailableAssignments(assignments);
+      setSelectedBuilding('');
+      setSelectedFloor('');
+      setSelectedLabs([]);
+      setBuildingAssignments([]);
+    } catch {
+      toast.error('Failed to fetch department locations');
+      setAvailableAssignments([]);
     }
   };
 
@@ -100,19 +173,58 @@ const DepartmentalAdmins = () => {
   };
 
   const addBuildingAssignment = () => {
-    if (!selectedBuilding || !selectedFloor) {
-      toast.error('Please select both building and floor');
-      return;
-    }
-
-    if (selectedLabs.length === 0) {
-      toast.error('Please select at least one lab');
+    if (!selectedBuilding) {
+      toast.error('Please select a building');
       return;
     }
 
     const buildingObj = availableAssignments.find(b => b.buildingId === selectedBuilding);
     if (!buildingObj) {
       toast.error('Invalid building selection');
+      return;
+    }
+
+    if (selectedFloor === ALL_FLOORS_VALUE) {
+      const floorAssignments = (buildingObj.availableFloors || []).map((floorObj) => ({
+        buildingId: selectedBuilding,
+        buildingName: buildingObj.buildingName,
+        floor: String(floorObj.floor),
+        labs: [...(floorObj.availableLabs || [])]
+      }));
+
+      if (floorAssignments.length === 0) {
+        toast.error('No available floor/lab assignments for this building');
+        return;
+      }
+
+      const existingKeys = new Set(
+        buildingAssignments.map((assignment) => `${assignment.buildingId}-${assignment.floor}`)
+      );
+
+      const newAssignments = floorAssignments.filter(
+        (assignment) => !existingKeys.has(`${assignment.buildingId}-${assignment.floor}`)
+      );
+
+      if (newAssignments.length === 0) {
+        toast.error('All floors for this building are already added');
+        return;
+      }
+
+      setBuildingAssignments(prev => [...prev, ...newAssignments]);
+      setSelectedBuilding('');
+      setSelectedFloor('');
+      setSelectedLabs([]);
+      toast.success('Added all available floors and labs for selected building');
+      return;
+    }
+
+    if (!selectedFloor) {
+      toast.error('Please select a floor');
+      return;
+    }
+
+    if (selectedLabs.length === 0) {
+      toast.error('Please select at least one lab');
       return;
     }
 
@@ -143,23 +255,71 @@ const DepartmentalAdmins = () => {
     setBuildingAssignments(prev => prev.filter((_, i) => i !== index));
   };
 
+  const openAdminEditModal = (admin) => {
+    setEditFormData({
+      id: admin._id,
+      name: admin.name || '',
+      email: admin.email || '',
+      department: admin.department?.name || ''
+    });
+    setShowAdminEditModal(true);
+  };
+
+  const handleAdminUpdate = async (e) => {
+    e.preventDefault();
+    try {
+      setIsUpdatingAdmin(true);
+      await updateDepartmentalAdmin(editFormData.id, {
+        name: editFormData.name,
+        email: editFormData.email,
+        department: editFormData.department
+      });
+      toast.success('Departmental admin updated successfully');
+      setShowAdminEditModal(false);
+      fetchData();
+    } catch (error) {
+      toast.error(error.message || 'Failed to update departmental admin');
+    } finally {
+      setIsUpdatingAdmin(false);
+    }
+  };
+
+  const handleAdminDelete = async (admin) => {
+    const confirmed = window.confirm(`Delete ${admin.name}?`);
+    if (!confirmed) return;
+
+    try {
+      await deleteDepartmentalAdmin(admin._id);
+      toast.success('Departmental admin deleted successfully');
+      fetchData();
+    } catch (error) {
+      toast.error(error.message || 'Failed to delete departmental admin');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      let submitData = { ...formData };
-      if (formData.department.toLowerCase().includes('network engineer')) {
+      const selectedDepartment = networkOnly
+        ? getNetworkEngineerDepartmentName()
+        : formData.department;
+
+      let submitData = { ...formData, department: selectedDepartment };
+      if (selectedDepartment) {
         if (buildingAssignments.length === 0) {
-          toast.error('Please add at least one building-floor assignment for Network Engineer');
+          toast.error('Please add at least one location assignment');
           return;
         }
         submitData.buildingAssignments = buildingAssignments;
       }
       console.log(submitData);
       await createDepartmentalAdmin(submitData);
-      toast.success('Departmental admin created successfully');
+      toast.success(networkOnly ? 'Network engineer created successfully' : 'Departmental admin created successfully');
       setShowAddModal(false);
-      setFormData({ name: '', email: '', department: '' });
-      setAvailableAssignments([]);
+      setFormData({ name: '', email: '', department: networkOnly ? getNetworkEngineerDepartmentName() : '' });
+      if (!networkOnly) {
+        setAvailableAssignments([]);
+      }
       setSelectedBuilding('');
       setSelectedFloor('');
       setSelectedLabs([]);
@@ -172,8 +332,10 @@ const DepartmentalAdmins = () => {
 
   const resetModal = () => {
     setShowAddModal(false);
-    setFormData({ name: '', email: '', department: '' });
-    setAvailableAssignments([]);
+    setFormData({ name: '', email: '', department: networkOnly ? getNetworkEngineerDepartmentName() : '' });
+    if (!networkOnly) {
+      setAvailableAssignments([]);
+    }
     setSelectedBuilding('');
     setSelectedFloor('');
     setSelectedLabs([]);
@@ -190,11 +352,15 @@ const DepartmentalAdmins = () => {
   };
 
   const filteredAdmins = departmentalAdmins.filter(admin => {
+    const isNetworkEngineer = admin.department?.name
+      ?.toLowerCase()
+      .includes('network engineer');
     const matchesSearch =
       admin.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       admin.email.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesDept = !departmentFilter || admin.department?.name === departmentFilter;
-    return matchesSearch && matchesDept;
+    const matchesRole = networkOnly ? isNetworkEngineer : !isNetworkEngineer;
+    return matchesSearch && matchesDept && matchesRole;
   });
 
   if (loading) {
@@ -208,13 +374,13 @@ const DepartmentalAdmins = () => {
   return (
       <div className="p-6 max-w-[1200px] mx-auto">
         <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-800">Departmental Admins</h1>
+          <h1 className="text-2xl font-bold text-gray-800">{networkOnly ? 'Network Engineers' : 'Departmental Admins'}</h1>
           <button
             onClick={() => setShowAddModal(true)}
             className="flex items-center px-4 py-2 bg-[#4B2D87] text-white rounded-lg hover:bg-[#5E3A9F] transition-colors"
           >
             <Plus size={20} className="mr-2" />
-            Add Admin
+            {networkOnly ? 'Add Network Engineer' : 'Add Admin'}
           </button>
         </div>
         {/* Filters */}
@@ -229,16 +395,18 @@ const DepartmentalAdmins = () => {
               onChange={e => setSearchQuery(e.target.value)}
             />
           </div>
-          <select
-            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
-            value={departmentFilter}
-            onChange={e => setDepartmentFilter(e.target.value)}
-          >
-            <option value="">All Departments</option>
-            {departments.map(dept => (
-              <option key={dept._id} value={dept.name}>{dept.name}</option>
-            ))}
-          </select>
+          {!networkOnly && (
+            <select
+              className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              value={departmentFilter}
+              onChange={e => setDepartmentFilter(e.target.value)}
+            >
+              <option value="">All Departments</option>
+              {departments.map(dept => (
+                <option key={dept._id} value={dept.name}>{dept.name}</option>
+              ))}
+            </select>
+          )}
         </div>
         {/* Admins Table */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
@@ -248,6 +416,7 @@ const DepartmentalAdmins = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Department</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
@@ -255,11 +424,11 @@ const DepartmentalAdmins = () => {
             <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan="5" className="px-6 py-4 text-center">Loading admins...</td>
+                  <td colSpan="6" className="px-6 py-4 text-center">Loading admins...</td>
                 </tr>
               ) : filteredAdmins.length === 0 ? (
                 <tr>
-                  <td colSpan="5" className="px-6 py-4 text-center">No departmental admins found</td>
+                  <td colSpan="6" className="px-6 py-4 text-center">No departmental admins found</td>
                 </tr>
               ) : (
                 filteredAdmins.map((admin) => (
@@ -267,6 +436,18 @@ const DepartmentalAdmins = () => {
                     <td className="px-6 py-4 text-sm font-medium text-gray-900">{admin.name}</td>
                     <td className="px-6 py-4 text-sm text-gray-700">{admin.email}</td>
                     <td className="px-6 py-4 text-sm text-gray-700">{admin.department?.name || 'N/A'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">
+                      {admin.locations && admin.locations.length > 0 ? (
+                        <button
+                          className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg text-xs font-medium hover:bg-blue-200 transition-colors"
+                          onClick={() => setViewLocationsModal({ open: true, locations: admin.locations, adminName: admin.name })}
+                        >
+                          View Locations
+                        </button>
+                      ) : (
+                        <span className="text-gray-500">No location assigned</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4">
                       <span className={`px-2 py-1 text-xs font-medium rounded-full ${
                         admin.isFirstLogin
@@ -277,43 +458,29 @@ const DepartmentalAdmins = () => {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      {admin.department?.name?.toLowerCase().includes('network engineer') && admin.locations && admin.locations.length > 0 ? (
-                        <div className="flex gap-2">
-                          <button
-                            className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg text-xs font-medium hover:bg-blue-200 transition-colors w-fit"
-                            onClick={() => setViewLocationsModal({ open: true, locations: admin.locations, adminName: admin.name })}
-                          >
-                            View
-                          </button>
-                          <button
-                            className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-lg text-xs font-medium hover:bg-yellow-200 transition-colors w-fit"
-                            onClick={async () => {
-                              setEditAdminId(admin._id);
-                              setEditAssignments((admin.locations || []).map(loc => ({
-                                buildingId: typeof loc.building === 'string' ? loc.building : loc.building?._id,
-                                buildingName: typeof loc.building === 'string' ? loc.building : loc.building?.name,
-                                floor: loc.floor,
-                                labs: loc.labs || []
-                              })));
-                              setShowEditModal(true);
-                              // Fetch available assignments for editing
-                              try {
-                                const assignments = await getAvailableNetworkEngineerFloors();
-                                setEditAvailableAssignments(assignments);
-                              } catch {
-                                setEditAvailableAssignments([]);
-                              }
-                              setEditSelectedBuilding('');
-                              setEditSelectedFloor('');
-                              setEditSelectedLabs([]);
-                            }}
-                          >
-                            Edit
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-gray-400 text-xs">-</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg text-xs font-medium hover:bg-blue-200 transition-colors"
+                          onClick={() => setViewAdminModal({ open: true, admin })}
+                          title="View admin"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-lg text-xs font-medium hover:bg-yellow-200 transition-colors"
+                          onClick={() => openAdminEditModal(admin)}
+                          title="Edit admin"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          className="px-3 py-1 bg-red-100 text-red-800 rounded-lg text-xs font-medium hover:bg-red-200 transition-colors"
+                          onClick={() => handleAdminDelete(admin)}
+                          title="Delete admin"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -546,11 +713,111 @@ const DepartmentalAdmins = () => {
           </div>
         )}
 
+        {/* View Admin Modal */}
+        {viewAdminModal.open && viewAdminModal.admin && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+            <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto relative">
+              <button
+                className="absolute top-3 right-3 text-gray-400 hover:text-gray-700"
+                onClick={() => setViewAdminModal({ open: false, admin: null })}
+                title="Close"
+              >
+                <X size={20} />
+              </button>
+              <h2 className="text-xl font-bold text-gray-900 mb-4">Admin Details</h2>
+              <div className="space-y-3 text-sm text-gray-800">
+                <p><span className="font-semibold">Name:</span> {viewAdminModal.admin.name}</p>
+                <p><span className="font-semibold">Email:</span> {viewAdminModal.admin.email}</p>
+                <p><span className="font-semibold">Department:</span> {viewAdminModal.admin.department?.name || 'N/A'}</p>
+                <p>
+                  <span className="font-semibold">Status:</span>{' '}
+                  {viewAdminModal.admin.isFirstLogin ? 'First Login Pending' : 'Active'}
+                </p>
+                <p>
+                  <span className="font-semibold">Location:</span>{' '}
+                  {viewAdminModal.admin.locations && viewAdminModal.admin.locations.length > 0
+                    ? `${viewAdminModal.admin.locations.length} assigned`
+                    : 'No location assigned'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showAdminEditModal && (
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/30 flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+              <h2 className="text-xl font-bold text-gray-900 mb-6">Edit Departmental Admin</h2>
+              <form onSubmit={handleAdminUpdate} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <input
+                    type="text"
+                    value={editFormData.name}
+                    onChange={(e) => setEditFormData((prev) => ({ ...prev, name: e.target.value }))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4B2D87] focus:border-transparent"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={editFormData.email}
+                    onChange={(e) => setEditFormData((prev) => ({ ...prev, email: e.target.value }))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4B2D87] focus:border-transparent"
+                    required
+                  />
+                </div>
+
+                {!networkOnly && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                    <select
+                      value={editFormData.department}
+                      onChange={(e) => setEditFormData((prev) => ({ ...prev, department: e.target.value }))}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4B2D87] focus:border-transparent"
+                      required
+                    >
+                      <option value="">Select Department</option>
+                      {departments.map((dept) => (
+                        <option key={dept._id} value={dept.name}>
+                          {dept.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminEditModal(false)}
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingAdmin}
+                    className="px-4 py-2 bg-[#4B2D87] text-white rounded-lg hover:bg-[#5E3A9F] disabled:opacity-70"
+                  >
+                    {isUpdatingAdmin ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Add Modal */}
         {showAddModal && (
           <div className="fixed inset-0 backdrop-blur-sm bg-black/30 flex items-center justify-center z-50">
             <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-              <h2 className="text-xl font-bold text-gray-900 mb-6">Add Departmental Admin</h2>
+              <h2 className="text-xl font-bold text-gray-900 mb-6">
+                {networkOnly ? 'Add Network Engineer' : 'Add Departmental Admin'}
+              </h2>
               
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
@@ -579,29 +846,43 @@ const DepartmentalAdmins = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Department
-                  </label>
-                  <select
-                    value={formData.department}
-                    onChange={handleDepartmentChange}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4B2D87] focus:border-transparent"
-                    required
-                  >
-                    <option value="">Select Department</option>
-                    {departments.map((dept) => (
-                      <option key={dept._id} value={dept.name}>
-                        {dept.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {networkOnly ? (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Department
+                    </label>
+                    <input
+                      type="text"
+                      value={getNetworkEngineerDepartmentName()}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600"
+                      readOnly
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Department
+                    </label>
+                    <select
+                      value={formData.department}
+                      onChange={handleDepartmentChange}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4B2D87] focus:border-transparent"
+                      required
+                    >
+                      <option value="">Select Department</option>
+                      {departments.map((dept) => (
+                        <option key={dept._id} value={dept.name}>
+                          {dept.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
-                {/* Show building/floor assignment section only for Network Engineer */}
-                {formData.department.toLowerCase().includes('network engineer') && (
+                {/* Show location assignment section after department is selected */}
+                {(networkOnly || Boolean(formData.department)) && (
                   <div className="border-t pt-4">
-                    <h3 className="text-lg font-medium text-gray-900 mb-3">Buildings</h3>
+                    <h3 className="text-lg font-medium text-gray-900 mb-3">Locations</h3>
                     
                     {/* Current Assignments */}
                     {buildingAssignments.length > 0 && (
@@ -664,6 +945,9 @@ const DepartmentalAdmins = () => {
                             disabled={!selectedBuilding}
                           >
                             <option value="">Select Floor</option>
+                            {(networkOnly || formData.department.toLowerCase().includes('network engineer')) && (
+                              <option value={ALL_FLOORS_VALUE}>All Floors (All Labs)</option>
+                            )}
                             {availableAssignments.find(b => b.buildingId === selectedBuilding)?.availableFloors.map(floor => (
                               <option key={floor.floor} value={floor.floor}>{floor.floor}</option>
                             ))}
@@ -671,8 +955,14 @@ const DepartmentalAdmins = () => {
                         </div>
                       </div>
 
+                      {availableAssignments.length === 0 && (
+                        <p className="text-xs text-gray-500 mb-3">
+                          No mapped locations found for this department.
+                        </p>
+                      )}
+
                       {/* Labs Selection */}
-                      {selectedBuilding && selectedFloor && (
+                      {selectedBuilding && selectedFloor && selectedFloor !== ALL_FLOORS_VALUE && (
                         <div className="mb-3">
                           <label className="block text-xs font-medium text-gray-600 mb-2">Select Labs:</label>
                           <div className="grid grid-cols-3 gap-2 max-h-32 overflow-y-auto">
@@ -700,7 +990,11 @@ const DepartmentalAdmins = () => {
                         type="button"
                         onClick={addBuildingAssignment}
                         className="w-full px-3 py-2 text-sm bg-[#4B2D87] text-white rounded-lg hover:bg-[#5E3A9F] transition-colors"
-                        disabled={!selectedBuilding || !selectedFloor || selectedLabs.length === 0}
+                        disabled={
+                          !selectedBuilding ||
+                          !selectedFloor ||
+                          (selectedFloor !== ALL_FLOORS_VALUE && selectedLabs.length === 0)
+                        }
                       >
                         Add Assignment
                       </button>

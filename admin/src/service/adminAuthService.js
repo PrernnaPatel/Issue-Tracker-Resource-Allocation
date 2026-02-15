@@ -66,6 +66,14 @@ export const makeAuthorizedRequest = async (endpoint, options = {}) => {
 
   const data = await response.json();
   if (!response.ok) {
+    if (
+      data?.message === "Department not found." &&
+      Array.isArray(data?.availableDepartments)
+    ) {
+      throw new Error(
+        `${data.message} Requested: "${data.requestedDepartment}". Available: ${data.availableDepartments.join(", ")}`
+      );
+    }
     throw new Error(data.message || 'Request failed');
   }
 
@@ -297,20 +305,23 @@ export const getAllDepartmentalAdmins = async () => {
     }
 
     // Map the response to match the expected structure
-    const formattedAdmins = response.admin.map(admin => ({
+    const formattedAdmins = response.admin.map((admin) => ({
       _id: admin._id,
       name: admin.name,
       email: admin.email,
-      department: {
-        _id: admin.department._id,
-        name: admin.department.name,
-        description: admin.department.description
-      },
+      department: admin.department
+        ? {
+            _id: admin.department._id,
+            name: admin.department.name,
+            description: admin.department.description,
+          }
+        : null,
       isFirstLogin: admin.isFirstLogin,
       createdAt: admin.createdAt,
       updatedAt: admin.updatedAt,
+      itDepartmentAdmin: admin.itDepartmentAdmin || null,
       // Include locations for network engineers
-      ...(admin.locations && { locations: admin.locations })
+      ...(admin.locations && { locations: admin.locations }),
     }));
 
     return formattedAdmins;
@@ -329,12 +340,21 @@ export const createDepartmentalAdmin = async (adminData) => {
       department: adminData.department
     };
 
-    // If it's a network engineer, format the building assignments
-    if (adminData.department.toLowerCase().includes('network engineer') && adminData.buildingAssignments) {
-      formattedData.locations = adminData.buildingAssignments.map(assignment => ({
-        building: assignment.buildingName, // Backend expects building name, not ID
+    // If it's a network engineer, include linked IT admin.
+    if (adminData.department.toLowerCase().includes('network engineer')) {
+      if (adminData.itDepartmentAdminId) {
+        formattedData.itDepartmentAdminId = adminData.itDepartmentAdminId;
+      }
+    }
+
+    // For all departmental admins, pass selected location mappings if provided.
+    if (adminData.locations && Array.isArray(adminData.locations)) {
+      formattedData.locations = adminData.locations;
+    } else if (adminData.buildingAssignments) {
+      formattedData.locations = adminData.buildingAssignments.map((assignment) => ({
+        building: assignment.buildingName, // Backend expects building name
         floor: assignment.floor,
-        labs: assignment.labs || [] // Add labs array - will need to be populated from frontend
+        labs: assignment.labs || [],
       }));
     }
 
@@ -349,17 +369,40 @@ export const createDepartmentalAdmin = async (adminData) => {
   }
 };
 
-// export const deleteDepartmentalAdmin = async (adminId) => {
-//   try {
-//     const response = await makeAuthorizedRequest(`/delete-departmental-admin/${adminId}`, {
-//       method: 'DELETE'
-//     });
-//     return response;
-//   } catch (error) {
-//     console.error('Error deleting departmental admin:', error);
-//     throw error;
-//   }
-// };
+export const updateDepartmentalAdmin = async (adminId, adminData) => {
+  try {
+    const response = await makeAuthorizedRequest(`/update-departmental-admin/${adminId}`, {
+      method: 'PUT',
+      body: JSON.stringify(adminData),
+    });
+    return response;
+  } catch (error) {
+    console.error('Error updating departmental admin:', error);
+    throw error;
+  }
+};
+
+export const getDepartmentLocations = async (departmentId) => {
+  try {
+    const response = await makeAuthorizedRequest(`/department-locations/${departmentId}`);
+    return response.availableAssignments || [];
+  } catch (error) {
+    console.error("Error fetching department locations:", error);
+    throw error;
+  }
+};
+
+export const deleteDepartmentalAdmin = async (adminId) => {
+  try {
+    const response = await makeAuthorizedRequest(`/delete-departmental-admin/${adminId}`, {
+      method: 'DELETE'
+    });
+    return response;
+  } catch (error) {
+    console.error('Error deleting departmental admin:', error);
+    throw error;
+  }
+};
 
 
 export const getAttachment = async (filename) => {

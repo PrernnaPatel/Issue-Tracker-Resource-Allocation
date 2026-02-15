@@ -4,8 +4,11 @@ import {
   addBuilding,
   createDepartmentalAdmin,
   getAllDepartmentalAdmin,
+  updateDepartmentalAdmin,
+  deleteDepartmentalAdmin,
   updateBuilding,
   getAvailableNetworkEngineerFloors,
+  getDepartmentLocations,
   deleteBuilding,
   updateNetworkEngineerLocations,
   addComponentSet,
@@ -50,7 +53,10 @@ router.put("/update-building/:id", adminAuthMiddleware, updateBuilding);
 router.put("/delete-building/:buildId", adminAuthMiddleware, deleteBuilding);
 router.get("/all-buildings", adminAuthMiddleware, sendBuilding);
 router.post("/create-departmental-admin", adminAuthMiddleware, createDepartmentalAdmin);
+router.put("/update-departmental-admin/:id", adminAuthMiddleware, updateDepartmentalAdmin);
+router.delete("/delete-departmental-admin/:id", adminAuthMiddleware, deleteDepartmentalAdmin);
 router.get("/available-network-engineer-floors", adminAuthMiddleware, getAvailableNetworkEngineerFloors);
+router.get("/department-locations/:departmentId", adminAuthMiddleware, getDepartmentLocations);
 router.get("/get-departmental-admins", adminAuthMiddleware, getAllDepartmentalAdmin);
 router.get("/get-attachment/:filename", adminAuthMiddleware, getAttachment);
 router.put(

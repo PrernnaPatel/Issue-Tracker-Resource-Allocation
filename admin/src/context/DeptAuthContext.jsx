@@ -33,6 +33,8 @@ export const DeptAuthProvider = ({ children }) => {
   };
 
   const logout = () => {
+    sessionStorage.removeItem('deptAdminToken');
+    sessionStorage.removeItem('deptAdminData');
     localStorage.removeItem('deptAdminToken');
     localStorage.removeItem('deptAdminData');
     setToken(null);

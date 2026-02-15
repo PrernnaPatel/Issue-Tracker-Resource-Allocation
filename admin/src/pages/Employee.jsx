@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Edit2, Trash2, MoreVertical } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { getAllEmployees } from '../service/adminAuthService';
 import { toast } from 'react-toastify';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 const Employee = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -21,17 +22,33 @@ const Employee = () => {
     setCurrentPage(1);
   }, [searchQuery]);
 
+  const departmentIdFilter = searchParams.get('departmentId') || '';
+  const departmentNameFilter = searchParams.get('departmentName') || '';
+
+  const employeesByDepartment = employees.filter((emp) => {
+    if (!departmentIdFilter) return true;
+    const employeeDeptId =
+      typeof emp.department === 'object' ? emp.department?._id : '';
+    return String(employeeDeptId) === String(departmentIdFilter);
+  });
+
   // Filter employees by search query
-  const filteredEmployees = employees.filter(emp => {
+  const filteredEmployees = employeesByDepartment.filter(emp => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return true;
+    const locationText = [
+      typeof emp.building === 'object' ? emp.building?.name : emp.building,
+      emp.floor ? `Floor ${emp.floor}` : '',
+      emp.lab_no ? `Lab ${emp.lab_no}` : '',
+    ].filter(Boolean).join(' ');
     return (
       emp.name.toLowerCase().includes(query) ||
       emp.email.toLowerCase().includes(query) ||
       (typeof emp.department === 'object'
         ? (emp.department?.name || '').toLowerCase().includes(query)
         : (emp.department || '').toLowerCase().includes(query)) ||
-      String(emp.contact_no || '').toLowerCase().includes(query)
+      String(emp.contact_no || '').toLowerCase().includes(query) ||
+      locationText.toLowerCase().includes(query)
     );
   });
 
@@ -57,10 +74,36 @@ const Employee = () => {
     navigate(`/admin/employee/${employeeId}`);
   };
 
+  const getLocationText = (employee) => {
+    const buildingName =
+      typeof employee.building === 'object'
+        ? employee.building?.name
+        : employee.building;
+    const floorText = employee.floor ? `Floor ${employee.floor}` : '';
+    const labText = employee.lab_no ? `Lab ${employee.lab_no}` : '';
+    return [buildingName, floorText, labText].filter(Boolean).join(', ') || 'Not Available';
+  };
+
+  const getRegisteredOnText = (employee) => {
+    if (!employee.createdAt) return 'Not Available';
+    const date = new Date(employee.createdAt);
+    if (Number.isNaN(date.getTime())) return 'Not Available';
+    return date.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
   return (
       <div className="p-6 max-w-[1600px] mx-auto">
         <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-800">Employees</h1>
+          <h1 className="text-2xl font-bold text-gray-800">
+            {departmentNameFilter ? `${departmentNameFilter} Employees` : 'Employees'}
+          </h1>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200">
@@ -85,21 +128,22 @@ const Employee = () => {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact No.</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Registered On</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {loading ? (
                   <tr>
-                    <td colSpan="5" className="px-6 py-4 text-center text-gray-500">
+                    <td colSpan="6" className="px-6 py-4 text-center text-gray-500">
                       Loading employees...
                     </td>
                   </tr>
                 ) : currentEmployees.length === 0 ? (
                   <tr>
-                    <td colSpan="5" className="px-6 py-4 text-center text-gray-500">
+                    <td colSpan="6" className="px-6 py-4 text-center text-gray-500">
                       No employees found
                     </td>
                   </tr>
@@ -126,6 +170,9 @@ const Employee = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{employee.email}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {getLocationText(employee)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {typeof employee.department === 'object'
                           ? employee.department?.name || 'Not Assigned'
                           : employee.department || 'Not Assigned'}
@@ -133,18 +180,8 @@ const Employee = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {employee.contact_no || 'Not Available'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex items-center justify-end gap-2">
-                          <button className="text-indigo-600 hover:text-indigo-900">
-                            <Edit2 size={16} />
-                          </button>
-                          <button className="text-red-600 hover:text-red-900">
-                            <Trash2 size={16} />
-                          </button>
-                          <button className="text-gray-400 hover:text-gray-600">
-                            <MoreVertical size={16} />
-                          </button>
-                        </div>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {getRegisteredOnText(employee)}
                       </td>
                     </tr>
                   ))

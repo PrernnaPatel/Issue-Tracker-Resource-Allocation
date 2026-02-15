@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Building2, Search, UserPlus, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Building2, Search, UserPlus, Plus, Pencil, Trash2, UserCog } from 'lucide-react';
 import { getAllDepartments, addDepartment, updateDepartment, deleteDepartment } from '../service/adminAuthService';
 import { toast } from 'react-toastify';
+import { useNavigate } from 'react-router-dom';
 
 
 const Departments = () => {
+  const navigate = useNavigate();
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,9 +42,16 @@ const Departments = () => {
     dept.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleViewEmployees = () => {
-    // Add navigation to department employees page
-    // You can implement this later
+  const handleViewEmployees = (dept) => {
+    navigate(
+      `/admin/employee?departmentId=${encodeURIComponent(dept._id)}&departmentName=${encodeURIComponent(dept.name)}`
+    );
+  };
+
+  const handleViewDepartmentAdmins = (dept) => {
+    navigate(
+      `/admin/departmental-admins?department=${encodeURIComponent(dept.name)}`
+    );
   };
 
   const getColorTheme = (index) => {
@@ -160,15 +169,32 @@ const Departments = () => {
                       <span className="font-semibold">{dept.employeeCount || 0}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
+                      <span className={theme.color}>Department Admins</span>
+                      <span className="font-semibold">{dept.departmentAdminCount || 0}</span>
+                    </div>
+                    {/^it(\s+department)?$/i.test(dept.name || '') && (
+                      <div className="flex items-center justify-between text-sm">
+                        <span className={theme.color}>Network Engineers</span>
+                        <span className="font-semibold">{dept.networkEngineerCount || 0}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-sm">
                       <span className={theme.color}>Can Resolve</span>
                       <span className="font-semibold">{dept.canResolve ? 'Yes' : 'No'}</span>
                     </div>
                     <button
-                      onClick={() => handleViewEmployees(dept._id)}
-                      className={`w-full bg-white bg-opacity-50 hover:bg-opacity-75 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors ${theme.color}`}
+                      onClick={() => handleViewEmployees(dept)}
+                      className={`w-full bg-white bg-opacity-50 hover:bg-opacity-75 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors !cursor-pointer ${theme.color}`}
                     >
                       <UserPlus size={16} />
                       View Employees
+                    </button>
+                    <button
+                      onClick={() => handleViewDepartmentAdmins(dept)}
+                      className={`w-full bg-white bg-opacity-50 hover:bg-opacity-75 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors !cursor-pointer ${theme.color}`}
+                    >
+                      <UserCog size={16} />
+                      View Department Admins
                     </button>
                   </div>
 

@@ -12,6 +12,12 @@ import crypto from "crypto";
 import ActionLog from "../models/ActionLog.model.js";
 import InventorySystem from "../models/InventorySystem.model.js";
 
+const normalizeName = (value = "") =>
+  value.trim().replace(/\s+/g, " ").toLowerCase();
+
+const isNetworkEngineerDepartment = (name = "") =>
+  /^network engineer$/i.test(name.trim());
+
 //Admin Login
 export const adminLogin = async (req, res) => {
   const { email, password } = req.body;
@@ -189,11 +195,26 @@ export const updateBuilding = async (req, res) => {
 //Create Departmental Admin
 export const createDepartmentalAdmin = async (req, res) => {
   try {
-    const { name, email, department, locations } = req.body;
+    const { name, email, department, locations, itDepartmentAdminId } = req.body;
 
-    const departmentDoc = await Department.findOne({ name: department });
+    const normalizedDepartment = normalizeName(department || "");
+    const allDepartments = await Department.find({}).select("name");
+    let departmentDoc = allDepartments.find(
+      (dept) => normalizeName(dept.name) === normalizedDepartment
+    );
+    if (!departmentDoc && normalizedDepartment === "network engineer") {
+      departmentDoc = await Department.create({
+        name: "Network Engineer",
+        description: "Auto-created for network engineer administration.",
+        canResolve: true,
+      });
+    }
     if (!departmentDoc) {
-      return res.status(400).json({ message: "Department not found." });
+      return res.status(400).json({
+        message: "Department not found.",
+        requestedDepartment: department,
+        availableDepartments: allDepartments.map((dept) => dept.name),
+      });
     }
 
     const existingAdmin = await DepartmentalAdmin.findOne({ email });
@@ -204,15 +225,14 @@ export const createDepartmentalAdmin = async (req, res) => {
     }
 
     let validatedLocations = [];
+    let linkedITAdminId = null;
 
-    if (department.toLowerCase() === "network engineer") {
+    const validateLocations = async ({ enforceConflictCheck = false } = {}) => {
       if (!locations || !Array.isArray(locations) || locations.length === 0) {
-        return res.status(400).json({
-          message:
-            "At least one building-floor-lab mapping is required for Network Engineer.",
-        });
+        return [];
       }
 
+      const parsedLocations = [];
       for (const loc of locations) {
         const { building, floor, labs } = loc;
 
@@ -222,61 +242,97 @@ export const createDepartmentalAdmin = async (req, res) => {
           !Array.isArray(labs) ||
           labs.length === 0
         ) {
-          return res.status(400).json({
-            message:
-              "Each location must include building, floor, and at least one lab.",
-          });
+          return { error: "Each location must include building, floor, and at least one lab." };
         }
 
         const buildingDoc = await Building.findOne({ name: building });
         if (!buildingDoc) {
-          return res
-            .status(404)
-            .json({ message: `Building '${building}' not found.` });
+          return { error: `Building '${building}' not found.` };
         }
 
         const floorExists = buildingDoc.floors.some(
           (f) => f.floor === parseInt(floor)
         );
         if (!floorExists) {
-          return res.status(400).json({
-            message: `Floor ${floor} does not exist in building '${building}'.`,
-          });
+          return { error: `Floor ${floor} does not exist in building '${building}'.` };
         }
 
-        // Conflict Check
-        const existingAdmins = await DepartmentalAdmin.find({
-          department: departmentDoc._id,
-          "locations.building": buildingDoc._id,
-          "locations.floor": floor,
-        });
+        if (enforceConflictCheck) {
+          const existingAdmins = await DepartmentalAdmin.find({
+            department: departmentDoc._id,
+            "locations.building": buildingDoc._id,
+            "locations.floor": floor,
+          });
 
-        for (const admin of existingAdmins) {
-          for (const existingLoc of admin.locations || []) {
-            if (
-              existingLoc.building.toString() === buildingDoc._id.toString() &&
-              existingLoc.floor === parseInt(floor)
-            ) {
-              const conflictingLabs = existingLoc.labs.filter((lab) =>
-                labs.includes(lab)
-              );
-              if (conflictingLabs.length > 0) {
-                return res.status(400).json({
-                  message: `Labs [${conflictingLabs.join(
-                    ", "
-                  )}] on floor ${floor} in building '${building}' are already assigned to another engineer.`,
-                });
+          for (const admin of existingAdmins) {
+            for (const existingLoc of admin.locations || []) {
+              if (
+                existingLoc.building.toString() === buildingDoc._id.toString() &&
+                existingLoc.floor === parseInt(floor)
+              ) {
+                const conflictingLabs = existingLoc.labs.filter((lab) =>
+                  labs.includes(lab)
+                );
+                if (conflictingLabs.length > 0) {
+                  return {
+                    error: `Labs [${conflictingLabs.join(
+                      ", "
+                    )}] on floor ${floor} in building '${building}' are already assigned to another engineer.`,
+                  };
+                }
               }
             }
           }
         }
 
-        validatedLocations.push({
+        parsedLocations.push({
           building: buildingDoc._id,
           floor: parseInt(floor),
           labs,
         });
       }
+
+      return { data: parsedLocations };
+    };
+
+    if (isNetworkEngineerDepartment(departmentDoc.name)) {
+      if (!itDepartmentAdminId) {
+        return res.status(400).json({
+          message: "IT Departmental Admin is required for Network Engineer.",
+        });
+      }
+
+      const itAdmin = await DepartmentalAdmin.findById(itDepartmentAdminId).populate("department");
+      if (!itAdmin || !itAdmin.department) {
+        return res.status(400).json({ message: "Selected IT Departmental Admin is invalid." });
+      }
+
+      const isITAdmin = /^it(\s+department)?$/i.test(itAdmin.department.name);
+      if (!isITAdmin) {
+        return res.status(400).json({
+          message: "Selected admin is not from IT department.",
+        });
+      }
+
+      linkedITAdminId = itAdmin._id;
+
+      if (!locations || !Array.isArray(locations) || locations.length === 0) {
+        return res.status(400).json({
+          message:
+            "At least one building-floor-lab mapping is required for Network Engineer.",
+        });
+      }
+      const validation = await validateLocations({ enforceConflictCheck: true });
+      if (validation.error) {
+        return res.status(400).json({ message: validation.error });
+      }
+      validatedLocations = validation.data || [];
+    } else if (Array.isArray(locations) && locations.length > 0) {
+      const validation = await validateLocations({ enforceConflictCheck: false });
+      if (validation.error) {
+        return res.status(400).json({ message: validation.error });
+      }
+      validatedLocations = validation.data || [];
     }
 
     const tempPassword = crypto.randomBytes(4).toString("hex");
@@ -288,7 +344,10 @@ export const createDepartmentalAdmin = async (req, res) => {
       department: departmentDoc._id,
       password: hashedPassword,
       isFirstLogin: true,
-      ...(department.toLowerCase() === "network engineer" && {
+      ...(isNetworkEngineerDepartment(departmentDoc.name) && {
+        itDepartmentAdmin: linkedITAdminId,
+      }),
+      ...(validatedLocations.length > 0 && {
         locations: validatedLocations,
       }),
     });
@@ -331,6 +390,7 @@ export const getAllDepartmentalAdmin = async (req, res) => {
   try {
     const admins = await DepartmentalAdmin.find({})
       .populate("department", "name description")
+      .populate("itDepartmentAdmin", "name email")
       .populate("locations.building", "name") // populate building inside locations
       .select("-password");
 
@@ -342,6 +402,189 @@ export const getAllDepartmentalAdmin = async (req, res) => {
     res.status(500).json({
       message: "Error fetching departmental admins",
       error: e.message,
+    });
+  }
+};
+
+export const getDepartmentLocations = async (req, res) => {
+  try {
+    const { departmentId } = req.params;
+    if (!departmentId) {
+      return res.status(400).json({ message: "Department ID is required." });
+    }
+
+    const employees = await Employee.find({ department: departmentId })
+      .populate("building", "name")
+      .select("building floor lab_no");
+
+    const departmentalAdmins = await DepartmentalAdmin.find({
+      department: departmentId,
+      locations: { $exists: true, $ne: [] },
+    })
+      .populate("locations.building", "name")
+      .select("locations");
+
+    const buildingMap = new Map();
+    const addMappedLocation = (building, floor, lab) => {
+      if (!building?._id) return;
+      const buildingId = String(building._id);
+      const buildingName = building.name || "Unknown Building";
+      if (!buildingMap.has(buildingId)) {
+        buildingMap.set(buildingId, { buildingId, buildingName, floors: new Map() });
+      }
+
+      const floorNumber = Number(floor);
+      const buildingEntry = buildingMap.get(buildingId);
+      if (!buildingEntry.floors.has(floorNumber)) {
+        buildingEntry.floors.set(floorNumber, new Set());
+      }
+
+      if (lab) {
+        buildingEntry.floors.get(floorNumber).add(lab);
+      }
+    };
+
+    employees.forEach((employee) => {
+      addMappedLocation(employee.building, employee.floor, employee.lab_no);
+    });
+
+    departmentalAdmins.forEach((admin) => {
+      (admin.locations || []).forEach((loc) => {
+        const building = loc.building;
+        (loc.labs || []).forEach((lab) => {
+          addMappedLocation(building, loc.floor, lab);
+        });
+      });
+    });
+
+    const availableAssignments = Array.from(buildingMap.values())
+      .map((buildingEntry) => ({
+        buildingId: buildingEntry.buildingId,
+        buildingName: buildingEntry.buildingName,
+        availableFloors: Array.from(buildingEntry.floors.entries())
+          .map(([floor, labsSet]) => ({
+            floor,
+            availableLabs: Array.from(labsSet).sort(),
+          }))
+          .sort((a, b) => a.floor - b.floor),
+      }))
+      .sort((a, b) => a.buildingName.localeCompare(b.buildingName));
+
+    return res.status(200).json({ availableAssignments });
+  } catch (error) {
+    console.error("Error fetching department locations:", error);
+    return res.status(500).json({
+      message: "Failed to fetch department locations.",
+      error: error.message,
+    });
+  }
+};
+
+export const updateDepartmentalAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, department } = req.body;
+
+    const admin = await DepartmentalAdmin.findById(id).populate("department", "name");
+    if (!admin) {
+      return res.status(404).json({ message: "Departmental admin not found." });
+    }
+
+    if (isNetworkEngineerDepartment(admin.department?.name || "")) {
+      return res.status(403).json({
+        message: "Network engineer edits are managed from the Network Engineers module.",
+      });
+    }
+
+    if (typeof name === "string" && name.trim()) {
+      admin.name = name.trim();
+    }
+
+    if (typeof email === "string" && email.trim()) {
+      const normalizedEmail = email.trim().toLowerCase();
+      const existingAdmin = await DepartmentalAdmin.findOne({
+        email: normalizedEmail,
+        _id: { $ne: admin._id },
+      });
+      if (existingAdmin) {
+        return res.status(400).json({ message: "Email already in use." });
+      }
+      admin.email = normalizedEmail;
+    }
+
+    if (typeof department === "string" && department.trim()) {
+      const normalizedDepartment = normalizeName(department);
+      const allDepartments = await Department.find({}).select("name");
+      const departmentDoc = allDepartments.find(
+        (dept) => normalizeName(dept.name) === normalizedDepartment
+      );
+
+      if (!departmentDoc) {
+        return res.status(400).json({ message: "Department not found." });
+      }
+
+      if (isNetworkEngineerDepartment(departmentDoc.name)) {
+        return res.status(400).json({
+          message: "Use Network Engineers page for Network Engineer entries.",
+        });
+      }
+
+      admin.department = departmentDoc._id;
+    }
+
+    await admin.save();
+
+    const updatedAdmin = await DepartmentalAdmin.findById(admin._id)
+      .populate("department", "name description")
+      .populate("itDepartmentAdmin", "name email")
+      .populate("locations.building", "name")
+      .select("-password");
+
+    return res.status(200).json({
+      message: "Departmental admin updated successfully.",
+      admin: updatedAdmin,
+    });
+  } catch (error) {
+    console.error("Error updating departmental admin:", error);
+    return res.status(500).json({
+      message: "Failed to update departmental admin.",
+      error: error.message,
+    });
+  }
+};
+
+export const deleteDepartmentalAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const admin = await DepartmentalAdmin.findById(id).populate("department", "name");
+    if (!admin) {
+      return res.status(404).json({ message: "Departmental admin not found." });
+    }
+
+    const isITDepartmentAdmin = /^it(\s+department)?$/i.test(admin.department?.name || "");
+    if (isITDepartmentAdmin) {
+      const linkedEngineers = await DepartmentalAdmin.exists({
+        itDepartmentAdmin: admin._id,
+      });
+      if (linkedEngineers) {
+        return res.status(400).json({
+          message:
+            "This IT departmental admin is linked to network engineers. Reassign/delete them first.",
+        });
+      }
+    }
+
+    await DepartmentalAdmin.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      message: "Departmental admin deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Error deleting departmental admin:", error);
+    return res.status(500).json({
+      message: "Failed to delete departmental admin.",
+      error: error.message,
     });
   }
 };
@@ -652,7 +895,21 @@ export const getLogs = async (req, res) => {
     }
 
     if (performedBy) {
-      filter.performedBy = performedBy;
+      const searchValue = String(performedBy).trim();
+      const matchedAdmins = await DepartmentalAdmin.find({
+        $or: [
+          { email: { $regex: searchValue, $options: "i" } },
+          { name: { $regex: searchValue, $options: "i" } },
+        ],
+      }).select("_id");
+
+      if (matchedAdmins.length > 0) {
+        filter.performedBy = { $in: matchedAdmins.map((admin) => admin._id) };
+      } else {
+        // Fallback: allow direct ObjectId filtering if a valid id string is provided
+        const directMatch = await DepartmentalAdmin.findById(searchValue).select("_id");
+        filter.performedBy = directMatch ? directMatch._id : { $in: [] };
+      }
     }
 
     if (affectedSystem) {
@@ -665,7 +922,9 @@ export const getLogs = async (req, res) => {
         filter.createdAt.$gte = new Date(from);
       }
       if (to) {
-        filter.createdAt.$lte = new Date(to);
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999);
+        filter.createdAt.$lte = toDate;
       }
     }
 

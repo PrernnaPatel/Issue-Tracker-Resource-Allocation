@@ -6,6 +6,7 @@ import {
   getDepartmentTickets,
   updateTicketStatus,
   getLoggedInDepartmentalAdmin,
+  getNetworkEngineersForDeptAdmin,
   addInventorySystem,
   getAllInventorySystems,
   updateInventorySystem,
@@ -34,6 +35,11 @@ router.post("/login-request", deptAdminLoginRequestOtp);
 router.post("/verify-otp", deptAdminVerifyOtpAndLogin);
 router.post("/change-password", deptAdminAuthMiddleware, changePassword);
 router.get("/my-data", deptAdminAuthMiddleware, getLoggedInDepartmentalAdmin);
+router.get(
+  "/network-engineers",
+  deptAdminAuthMiddleware,
+  getNetworkEngineersForDeptAdmin
+);
 router.get("/get-tickets", deptAdminAuthMiddleware, getDepartmentTickets);
 router.get("/get-attachment/:filename", deptAdminAuthMiddleware, getAttachment);
 router.put(
