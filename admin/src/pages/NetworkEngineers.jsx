@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Eye, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import {
   createDepartmentalAdmin,
-  deleteDepartmentalAdmin,
+  deleteNetworkEngineer,
+  getAllNetworkEngineers,
   getAllBuildings,
   getAllDepartmentalAdmins,
   updateNetworkEngineerLocations,
@@ -26,6 +27,7 @@ const createEmptyAssignment = () => ({
 const NetworkEngineers = () => {
   const [loading, setLoading] = useState(true);
   const [admins, setAdmins] = useState([]);
+  const [engineers, setEngineers] = useState([]);
   const [buildings, setBuildings] = useState([]);
   const [search, setSearch] = useState("");
   const [buildingFilter, setBuildingFilter] = useState("");
@@ -47,11 +49,13 @@ const NetworkEngineers = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [allAdmins, allBuildings] = await Promise.all([
+      const [allAdmins, allEngineers, allBuildings] = await Promise.all([
         getAllDepartmentalAdmins(),
+        getAllNetworkEngineers(),
         getAllBuildings(),
       ]);
       setAdmins(allAdmins || []);
+      setEngineers(allEngineers || []);
       setBuildings(allBuildings || []);
     } catch (error) {
       toast.error(error.message || "Failed to load network engineers");
@@ -64,13 +68,7 @@ const NetworkEngineers = () => {
     fetchData();
   }, []);
 
-  const networkEngineers = useMemo(
-    () =>
-      admins.filter((admin) =>
-        admin.department?.name?.toLowerCase().includes("network engineer")
-      ),
-    [admins]
-  );
+  const networkEngineers = useMemo(() => engineers, [engineers]);
 
   const itDeptAdmins = useMemo(
     () =>
@@ -78,26 +76,73 @@ const NetworkEngineers = () => {
     [admins]
   );
 
+  const selectedItAdmin = useMemo(
+    () => itDeptAdmins.find((admin) => String(admin._id) === String(formData.itDepartmentAdminId)),
+    [itDeptAdmins, formData.itDepartmentAdminId]
+  );
+
+  const allowedAssignments = useMemo(() => {
+    if (!selectedItAdmin || !Array.isArray(selectedItAdmin.locations)) return [];
+    const map = new Map();
+    selectedItAdmin.locations.forEach((loc) => {
+      const buildingId =
+        typeof loc.building === "object" ? String(loc.building._id || "") : String(loc.building);
+      if (!buildingId) return;
+      const buildingName =
+        typeof loc.building === "object"
+          ? loc.building.name
+          : getBuildingById(buildingId)?.name || String(loc.building || "");
+      if (!map.has(buildingId)) {
+        map.set(buildingId, { buildingId, buildingName, floors: new Map() });
+      }
+      const floorValue = String(loc.floor);
+      if (!map.get(buildingId).floors.has(floorValue)) {
+        map.get(buildingId).floors.set(floorValue, new Set());
+      }
+      (loc.labs || []).forEach((lab) => map.get(buildingId).floors.get(floorValue).add(lab));
+    });
+
+    return Array.from(map.values()).map((entry) => ({
+      buildingId: entry.buildingId,
+      buildingName: entry.buildingName,
+      availableFloors: Array.from(entry.floors.entries()).map(([floor, labsSet]) => ({
+        floor,
+        availableLabs: Array.from(labsSet),
+      })),
+    }));
+  }, [selectedItAdmin, buildings]);
+
   const getBuildingById = (buildingId) =>
     buildings.find((building) => String(building._id) === String(buildingId));
 
   const getFloorsForBuilding = (buildingId) => getBuildingById(buildingId)?.floors || [];
 
+  const getAllowedFloorsForBuilding = (buildingId) => {
+    if (!formData.itDepartmentAdminId) return [];
+    const entry = allowedAssignments.find((b) => String(b.buildingId) === String(buildingId));
+    if (!entry) return [];
+    return entry.availableFloors.map((floorObj) => ({ floor: floorObj.floor, labs: floorObj.availableLabs }));
+  };
+
   const getLabsForFloors = (buildingId, selectedFloors) => {
-    const floors = getFloorsForBuilding(buildingId);
+    const floors = formData.itDepartmentAdminId
+      ? getAllowedFloorsForBuilding(buildingId)
+      : getFloorsForBuilding(buildingId);
     const labs = new Set();
     floors.forEach((floorObj) => {
       if (selectedFloors.includes(String(floorObj.floor))) {
-        (floorObj.labs || []).forEach((lab) => labs.add(lab));
+        (floorObj.labs || floorObj.availableLabs || []).forEach((lab) => labs.add(lab));
       }
     });
     return Array.from(labs);
   };
 
   const getLabsForFloor = (buildingId, floor) => {
-    const floors = getFloorsForBuilding(buildingId);
+    const floors = formData.itDepartmentAdminId
+      ? getAllowedFloorsForBuilding(buildingId)
+      : getFloorsForBuilding(buildingId);
     const floorObj = floors.find((item) => String(item.floor) === String(floor));
-    return floorObj?.labs || [];
+    return floorObj?.labs || floorObj?.availableLabs || [];
   };
 
   const updateLocation = (index, updater) => {
@@ -236,6 +281,26 @@ const NetworkEngineers = () => {
       .join(" ; ");
   };
 
+  const groupedLocationsRows = (locations = []) => {
+    if (!Array.isArray(locations) || locations.length === 0) return [];
+    const grouped = new Map();
+    locations.forEach((loc) => {
+      const buildingName =
+        typeof loc.building === "object" ? loc.building.name : String(loc.building);
+      if (!grouped.has(buildingName)) {
+        grouped.set(buildingName, { floors: new Set(), labs: new Set() });
+      }
+      grouped.get(buildingName).floors.add(loc.floor);
+      (loc.labs || []).forEach((lab) => grouped.get(buildingName).labs.add(lab));
+    });
+
+    return Array.from(grouped.entries()).map(([buildingName, data]) => ({
+      buildingName,
+      floors: Array.from(data.floors).sort((a, b) => Number(a) - Number(b)),
+      labs: Array.from(data.labs),
+    }));
+  };
+
   const filteredEngineers = useMemo(() => {
     return networkEngineers.filter((engineer) => {
       const matchesSearch =
@@ -288,7 +353,7 @@ const NetworkEngineers = () => {
     if (!confirmed) return;
 
     try {
-      await deleteDepartmentalAdmin(engineer._id);
+      await deleteNetworkEngineer(engineer._id);
       toast.success("Network engineer deleted successfully");
       fetchData();
     } catch (error) {
@@ -470,7 +535,35 @@ const NetworkEngineers = () => {
                   ? `${selectedEngineer.itDepartmentAdmin.name} (${selectedEngineer.itDepartmentAdmin.email})`
                   : "-"}
               </p>
-              <p><span className="font-semibold">Locations:</span> {groupedLocationsText(selectedEngineer.locations)}</p>
+              <div>
+                <span className="font-semibold">Locations:</span>
+                {(() => {
+                  const rows = groupedLocationsRows(selectedEngineer.locations);
+                  if (rows.length === 0) {
+                    return <span className="ml-1">-</span>;
+                  }
+                  return (
+                    <div className="mt-2 space-y-2">
+                      {rows.map((row) => (
+                        <div
+                          key={row.buildingName}
+                          className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
+                        >
+                          <div className="text-sm font-medium text-gray-900">
+                            {row.buildingName}
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            Floors: {row.floors.join(", ") || "N/A"}
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            Labs: {row.labs.join(", ") || "N/A"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
               <p>
                 <span className="font-semibold">Status:</span>{" "}
                 {selectedEngineer.isFirstLogin ? "Pending" : "Active"}
@@ -719,7 +812,9 @@ const NetworkEngineers = () => {
 
                 <div className="space-y-3">
                   {formData.locations.map((location, index) => {
-                    const buildingFloors = getFloorsForBuilding(location.buildingId);
+                    const buildingFloors = formData.itDepartmentAdminId
+                      ? getAllowedFloorsForBuilding(location.buildingId)
+                      : getFloorsForBuilding(location.buildingId);
                     const availableLabs = getLabsForFloors(
                       location.buildingId,
                       location.selectedFloors
@@ -756,9 +851,15 @@ const NetworkEngineers = () => {
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                           >
                             <option value="">Select Building</option>
-                            {buildings.map((building) => (
-                              <option key={building._id} value={building._id}>
-                                {building.name}
+                            {(formData.itDepartmentAdminId
+                              ? allowedAssignments
+                              : buildings.map((building) => ({
+                                  buildingId: building._id,
+                                  buildingName: building.name,
+                                }))
+                            ).map((building) => (
+                              <option key={building.buildingId} value={building.buildingId}>
+                                {building.buildingName}
                               </option>
                             ))}
                           </select>

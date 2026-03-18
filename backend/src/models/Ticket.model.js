@@ -25,7 +25,7 @@ const ticketSchema = mongoose.Schema(
     },
     priority: {
       type: String,
-      enum: ["low", "normal", "high"],
+      enum: ["low", "normal", "high", "urgent"],
       default: "normal",
     },
     raised_by: {
@@ -44,7 +44,15 @@ const ticketSchema = mongoose.Schema(
     },
     assigned_to: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "DepartmentalAdmin",
+      ref: "NetworkEngineer",
+      default: null,
+    },
+    assigned_manually: {
+      type: Boolean,
+      default: false,
+    },
+    assigned_at: {
+      type: Date,
       default: null,
     },
     comments: [
@@ -86,8 +94,10 @@ const ticketSchema = mongoose.Schema(
 // Update last_activity_at when ticket is modified (but not for view updates)
 ticketSchema.pre("save", function (next) {
   if (this.isModified() && !this.isNew) {
-    // Check if only admin_views was modified (viewing ticket shouldn't count as activity)
-    const modifiedPaths = this.modifiedPaths();
+    // Ignore Mongoose timestamp updates when deciding activity
+    const modifiedPaths = this.modifiedPaths().filter(
+      (path) => path !== "updatedAt"
+    );
     const isOnlyViewUpdate =
       modifiedPaths.length === 1 && modifiedPaths[0] === "admin_views";
 

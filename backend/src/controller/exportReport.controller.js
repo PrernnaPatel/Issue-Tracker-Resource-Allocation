@@ -8,6 +8,7 @@ import puppeteer from "puppeteer";
 import { generateTicketReportHTML } from "../../template/ticketReportTemplate.js";
 import { ChartJSNodeCanvas } from "chartjs-node-canvas";
 import DepartmentalAdmin from "../models/DepartmentalAdmin.model.js";
+import NetworkEngineer from "../models/NetworkEngineer.model.js";
 import InventorySystem from "../models/InventorySystem.model.js";
 import { Building } from "../models/Building.model.js";
 import { logAction } from "../utils/logAction.js";
@@ -426,11 +427,15 @@ export const exportDepartmentalReport = async (req, res) => {
     } = req.query;
 
     const { id: adminId } = req.user;
+    const userType = req.user?.userType;
 
-    const admin = await DepartmentalAdmin.findById(adminId).populate("department");
+    const admin = userType === "network-engineer"
+      ? await NetworkEngineer.findById(adminId).populate("locations.building")
+      : await DepartmentalAdmin.findById(adminId).populate("department");
     if (!admin) return res.status(403).json({ message: "Unauthorized" });
 
-    const departmentName = admin.department?.name;
+    const departmentName =
+      userType === "network-engineer" ? "Network Engineer" : admin.department?.name;
     if (!departmentName)
       return res.status(400).json({ message: "Department not found." });
 
@@ -449,7 +454,7 @@ export const exportDepartmentalReport = async (req, res) => {
     ticketQuery.to_department = scopedDepartment._id;
 
     if (isNetworkEngineer) {
-      const assignedLocations = admin.locations.map((loc) => ({
+      const assignedLocations = (admin.locations || []).map((loc) => ({
         building: loc.building.toString(),
         floor: loc.floor,
         lab_no: { $in: loc.labs || [] },
@@ -675,14 +680,18 @@ export const exportDeptAdminTicketReportExcel = async (req, res) => {
       includeComments = "false",
     } = req.query;
     const { id: adminId } = req.user;
+    const userType = req.user?.userType;
 
-    const deptAdmin = await DepartmentalAdmin.findById(adminId).populate("department");
-    if (!deptAdmin || !deptAdmin.department) {
+    const deptAdmin = userType === "network-engineer"
+      ? await NetworkEngineer.findById(adminId)
+      : await DepartmentalAdmin.findById(adminId).populate("department");
+    if (!deptAdmin) {
       return res.status(403).json({ message: "Access denied. No department linked." });
     }
 
     const isNetworkEngineer =
-      deptAdmin.department.name.toLowerCase() === "network engineer";
+      userType === "network-engineer" ||
+      deptAdmin.department?.name?.toLowerCase() === "network engineer";
 
     const scopedDepartment = isNetworkEngineer
       ? await Department.findOne({ name: /^it(\s+department)?$/i })
@@ -811,10 +820,14 @@ export const exportDeptAdminTicketReportExcel = async (req, res) => {
     worksheet.addRow([]);
     worksheet.addRow([`Report generated on: ${moment().format("LLL")}`]);
 
+    const exportDepartmentName = isNetworkEngineer
+      ? "Network Engineer"
+      : deptAdmin.department.name;
+
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename=${deptAdmin.department.name}_Report.xlsx`
+      `attachment; filename=${exportDepartmentName}_Report.xlsx`
     );
     await workbook.xlsx.write(res);
 
@@ -838,17 +851,21 @@ export const exportInventoryExcel = async (req, res) => {
   try {
     const { building, floor, labNumber, systemType } = req.query;
     const adminId = req.user.id;
+    const userType = req.user?.userType;
 
-    const admin = await DepartmentalAdmin.findById(adminId)
-      .populate("department")
-      .populate("locations.building");
+    const admin = userType === "network-engineer"
+      ? await NetworkEngineer.findById(adminId).populate("locations.building")
+      : await DepartmentalAdmin.findById(adminId)
+          .populate("department")
+          .populate("locations.building");
 
     if (!admin) {
       return res.status(404).json({ message: "Departmental Admin not found" });
     }
 
     const isNetworkEngineer =
-      admin.department.name.toLowerCase().trim() === "network engineer";
+      userType === "network-engineer" ||
+      admin.department?.name?.toLowerCase().trim() === "network engineer";
 
     const buildingNames = building ? building.split(",") : [];
     const floors = floor ? floor.split(",") : [];

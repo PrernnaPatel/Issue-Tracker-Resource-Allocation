@@ -331,6 +331,30 @@ export const getAllDepartmentalAdmins = async () => {
   }
 };
 
+export const getAllNetworkEngineers = async () => {
+  try {
+    const response = await makeAuthorizedRequest('/get-network-engineers');
+    if (!response.engineers || !Array.isArray(response.engineers)) {
+      throw new Error('Invalid network engineer data received');
+    }
+
+    return response.engineers.map((engineer) => ({
+      _id: engineer._id,
+      name: engineer.name,
+      email: engineer.email,
+      department: { name: 'Network Engineer' },
+      isFirstLogin: engineer.isFirstLogin,
+      createdAt: engineer.createdAt,
+      updatedAt: engineer.updatedAt,
+      itDepartmentAdmin: engineer.itDepartmentAdmin || null,
+      ...(engineer.locations && { locations: engineer.locations }),
+    }));
+  } catch (error) {
+    console.error('Error fetching network engineers:', error);
+    throw error;
+  }
+};
+
 export const createDepartmentalAdmin = async (adminData) => {
   try {
     // Format the data to match backend expectations
@@ -400,6 +424,18 @@ export const deleteDepartmentalAdmin = async (adminId) => {
     return response;
   } catch (error) {
     console.error('Error deleting departmental admin:', error);
+    throw error;
+  }
+};
+
+export const deleteNetworkEngineer = async (engineerId) => {
+  try {
+    const response = await makeAuthorizedRequest(`/delete-network-engineer/${engineerId}`, {
+      method: 'DELETE'
+    });
+    return response;
+  } catch (error) {
+    console.error('Error deleting network engineer:', error);
     throw error;
   }
 };

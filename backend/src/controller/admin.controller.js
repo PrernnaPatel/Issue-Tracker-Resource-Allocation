@@ -6,6 +6,7 @@ import { Building } from "../models/Building.model.js";
 import Department from "../models/Department.model.js";
 import Employee from "../models/Employee.js";
 import DepartmentalAdmin from "../models/DepartmentalAdmin.model.js";
+import NetworkEngineer from "../models/NetworkEngineer.model.js";
 import { sendCredentialsEmail } from "../utils/sendCredentials.js";
 import ComponentSet from "../models/ComponentSet.model.js";
 import crypto from "crypto";
@@ -198,29 +199,28 @@ export const createDepartmentalAdmin = async (req, res) => {
     const { name, email, department, locations, itDepartmentAdminId } = req.body;
 
     const normalizedDepartment = normalizeName(department || "");
-    const allDepartments = await Department.find({}).select("name");
-    let departmentDoc = allDepartments.find(
-      (dept) => normalizeName(dept.name) === normalizedDepartment
-    );
-    if (!departmentDoc && normalizedDepartment === "network engineer") {
-      departmentDoc = await Department.create({
-        name: "Network Engineer",
-        description: "Auto-created for network engineer administration.",
-        canResolve: true,
-      });
-    }
-    if (!departmentDoc) {
-      return res.status(400).json({
-        message: "Department not found.",
-        requestedDepartment: department,
-        availableDepartments: allDepartments.map((dept) => dept.name),
-      });
+    const isNetworkEngineerRequest = normalizedDepartment === "network engineer";
+    let departmentDoc = null;
+
+    if (!isNetworkEngineerRequest) {
+      const allDepartments = await Department.find({}).select("name");
+      departmentDoc = allDepartments.find(
+        (dept) => normalizeName(dept.name) === normalizedDepartment
+      );
+      if (!departmentDoc) {
+        return res.status(400).json({
+          message: "Department not found.",
+          requestedDepartment: department,
+          availableDepartments: allDepartments.map((dept) => dept.name),
+        });
+      }
     }
 
     const existingAdmin = await DepartmentalAdmin.findOne({ email });
-    if (existingAdmin) {
+    const existingEngineer = await NetworkEngineer.findOne({ email });
+    if (existingAdmin || existingEngineer) {
       return res.status(400).json({
-        message: "This departmental admin already exists.",
+        message: "This user already exists.",
       });
     }
 
@@ -295,7 +295,7 @@ export const createDepartmentalAdmin = async (req, res) => {
       return { data: parsedLocations };
     };
 
-    if (isNetworkEngineerDepartment(departmentDoc.name)) {
+    if (isNetworkEngineerRequest) {
       if (!itDepartmentAdminId) {
         return res.status(400).json({
           message: "IT Departmental Admin is required for Network Engineer.",
@@ -322,7 +322,7 @@ export const createDepartmentalAdmin = async (req, res) => {
             "At least one building-floor-lab mapping is required for Network Engineer.",
         });
       }
-      const validation = await validateLocations({ enforceConflictCheck: true });
+      const validation = await validateLocations({ enforceConflictCheck: false });
       if (validation.error) {
         return res.status(400).json({ message: validation.error });
       }
@@ -338,15 +338,50 @@ export const createDepartmentalAdmin = async (req, res) => {
     const tempPassword = crypto.randomBytes(4).toString("hex");
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
+    if (isNetworkEngineerRequest) {
+      const engineer = new NetworkEngineer({
+        name,
+        email,
+        password: hashedPassword,
+        isFirstLogin: true,
+        itDepartmentAdmin: linkedITAdminId,
+        ...(validatedLocations.length > 0 && {
+          locations: validatedLocations,
+        }),
+      });
+
+      await engineer.save();
+
+      await sendCredentialsEmail({
+        name,
+        email,
+        tempPassword,
+        departmentName: "Network Engineer",
+      });
+
+      return res.status(200).json({
+        message: "Network Engineer created and credentials sent via email.",
+        admin: {
+          name: engineer.name,
+          email: engineer.email,
+          department: "Network Engineer",
+          ...(engineer.locations?.length && {
+            locations: validatedLocations.map((loc) => ({
+              building: loc.building.toString(),
+              floor: loc.floor,
+              labs: loc.labs,
+            })),
+          }),
+        },
+      });
+    }
+
     const admin = new DepartmentalAdmin({
       name,
       email,
       department: departmentDoc._id,
       password: hashedPassword,
       isFirstLogin: true,
-      ...(isNetworkEngineerDepartment(departmentDoc.name) && {
-        itDepartmentAdmin: linkedITAdminId,
-      }),
       ...(validatedLocations.length > 0 && {
         locations: validatedLocations,
       }),
@@ -388,7 +423,7 @@ export const createDepartmentalAdmin = async (req, res) => {
 //Fetch all department
 export const getAllDepartmentalAdmin = async (req, res) => {
   try {
-    const admins = await DepartmentalAdmin.find({})
+    const admins = await DepartmentalAdmin.find({ itDepartmentAdmin: null })
       .populate("department", "name description")
       .populate("itDepartmentAdmin", "name email")
       .populate("locations.building", "name") // populate building inside locations
@@ -402,6 +437,47 @@ export const getAllDepartmentalAdmin = async (req, res) => {
     res.status(500).json({
       message: "Error fetching departmental admins",
       error: e.message,
+    });
+  }
+};
+
+export const getAllNetworkEngineers = async (req, res) => {
+  try {
+    const engineers = await NetworkEngineer.find({})
+      .populate("itDepartmentAdmin", "name email")
+      .populate("locations.building", "name")
+      .select("-password");
+
+    res.status(200).json({
+      message: "Network engineers fetched successfully.",
+      engineers,
+    });
+  } catch (e) {
+    res.status(500).json({
+      message: "Error fetching network engineers",
+      error: e.message,
+    });
+  }
+};
+
+export const deleteNetworkEngineer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const engineer = await NetworkEngineer.findById(id);
+    if (!engineer) {
+      return res.status(404).json({ message: "Network engineer not found." });
+    }
+
+    await NetworkEngineer.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      message: "Network engineer deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Error deleting network engineer:", error);
+    return res.status(500).json({
+      message: "Failed to delete network engineer.",
+      error: error.message,
     });
   }
 };
@@ -483,7 +559,7 @@ export const getDepartmentLocations = async (req, res) => {
 export const updateDepartmentalAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, department } = req.body;
+    const { name, email, department, locations } = req.body;
 
     const admin = await DepartmentalAdmin.findById(id).populate("department", "name");
     if (!admin) {
@@ -532,6 +608,31 @@ export const updateDepartmentalAdmin = async (req, res) => {
       admin.department = departmentDoc._id;
     }
 
+    if (Array.isArray(locations)) {
+      const normalizedLocations = locations
+        .filter(
+          (loc) =>
+            loc &&
+            loc.building &&
+            loc.floor !== undefined &&
+            Array.isArray(loc.labs) &&
+            loc.labs.length > 0
+        )
+        .map((loc) => ({
+          building: loc.building,
+          floor: Number(loc.floor),
+          labs: loc.labs,
+        }));
+
+      if (normalizedLocations.length === 0) {
+        return res.status(400).json({
+          message: "At least one building-floor-lab mapping is required.",
+        });
+      }
+
+      admin.locations = normalizedLocations;
+    }
+
     await admin.save();
 
     const updatedAdmin = await DepartmentalAdmin.findById(admin._id)
@@ -564,7 +665,7 @@ export const deleteDepartmentalAdmin = async (req, res) => {
 
     const isITDepartmentAdmin = /^it(\s+department)?$/i.test(admin.department?.name || "");
     if (isITDepartmentAdmin) {
-      const linkedEngineers = await DepartmentalAdmin.exists({
+      const linkedEngineers = await NetworkEngineer.exists({
         itDepartmentAdmin: admin._id,
       });
       if (linkedEngineers) {
@@ -591,46 +692,7 @@ export const deleteDepartmentalAdmin = async (req, res) => {
 
 export const getAvailableNetworkEngineerFloors = async (req, res) => {
   try {
-    // 1. Get Network Engineer Department
-    const networkEngineerDept = await Department.findOne({
-      name: /network engineer/i,
-    });
-    if (!networkEngineerDept) {
-      return res.status(404).json({
-        message: "Network Engineer department not found.",
-      });
-    }
-
-    // 2. Get existing engineers with location mappings
-    const engineers = await DepartmentalAdmin.find({
-      department: networkEngineerDept._id,
-      locations: { $exists: true, $ne: [] },
-    }).select("locations");
-
-    // 3. Build assigned map: buildingId => { floor => Set(labs) }
-    const assignedMap = new Map();
-    for (const eng of engineers) {
-      for (const loc of eng.locations) {
-        const buildingId = loc.building.toString();
-        const floor = loc.floor;
-        const labs = loc.labs || [];
-
-        if (!assignedMap.has(buildingId)) {
-          assignedMap.set(buildingId, new Map());
-        }
-        const floorMap = assignedMap.get(buildingId);
-
-        if (!floorMap.has(floor)) {
-          floorMap.set(floor, new Set());
-        }
-
-        for (const lab of labs) {
-          floorMap.get(floor).add(lab);
-        }
-      }
-    }
-
-    // 4. Fetch all buildings and floors
+    // 1. Fetch all buildings and floors
     const buildings = await Building.find();
 
     const result = [];
@@ -642,18 +704,10 @@ export const getAvailableNetworkEngineerFloors = async (req, res) => {
       for (const floorObj of building.floors) {
         const floor = floorObj.floor;
         const allLabs = floorObj.labs || [];
-
-        const assignedLabs =
-          assignedMap.get(buildingId)?.get(floor) || new Set();
-
-        const availableLabs = allLabs.filter((lab) => !assignedLabs.has(lab));
-
-        if (availableLabs.length > 0) {
-          floorAssignments.push({
-            floor,
-            availableLabs,
-          });
-        }
+        floorAssignments.push({
+          floor,
+          availableLabs: allLabs,
+        });
       }
 
       if (floorAssignments.length > 0) {
@@ -719,16 +773,9 @@ export const updateNetworkEngineerLocations = async (req, res) => {
     const { id } = req.params;
     const { locations } = req.body;
 
-    const admin = await DepartmentalAdmin.findById(id).populate("department");
-    if (!admin) {
+    const engineer = await NetworkEngineer.findById(id);
+    if (!engineer) {
       return res.status(404).json({ message: "Admin not found." });
-    }
-
-    if (
-      !admin.department ||
-      admin.department.name.toLowerCase() !== "network engineer"
-    ) {
-      return res.status(403).json({ message: "Not a network engineer admin." });
     }
 
     if (!Array.isArray(locations) || locations.length === 0) {
@@ -753,12 +800,12 @@ export const updateNetworkEngineerLocations = async (req, res) => {
     }
 
     // Replace with filtered locations (ignore empty lab entries)
-    admin.locations = locations.filter((loc) => loc.labs.length > 0);
-    await admin.save();
+    engineer.locations = locations.filter((loc) => loc.labs.length > 0);
+    await engineer.save();
 
     return res.status(200).json({
       message: "Locations updated successfully.",
-      updatedLocations: admin.locations,
+      updatedLocations: engineer.locations,
     });
   } catch (e) {
     console.error("Error updating locations:", e);

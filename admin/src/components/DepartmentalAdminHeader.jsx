@@ -12,11 +12,13 @@ const DepartmentAdminHeader = ({ onMenuClick }) => {
     unreadCount,
     totalUnreadTickets,
     notifications,
+    unreadTickets,
     showNotificationPanel,
     toggleNotificationPanel,
     markAsRead,
     markAllAsRead,
     clearNotification,
+    removeTicketFromUnread,
     isPolling,
   } = useNotifications()
   const navigate = useNavigate()
@@ -76,6 +78,27 @@ const DepartmentAdminHeader = ({ onMenuClick }) => {
   //   totalUnreadTickets,
   //   totalBadgeCount,
   // })
+
+  const displayNotifications =
+    notifications.length > 0
+      ? notifications
+          .map((notification) => ({
+            ...notification,
+            source: "stored",
+          }))
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      : unreadTickets
+          .map((ticket) => ({
+            id: ticket.ticketId,
+            title: ticket.title || `Ticket ${ticket.ticketRef || ""}`,
+            message: ticket.unreadCount
+              ? `${ticket.unreadCount} new update${ticket.unreadCount > 1 ? "s" : ""}`
+              : "Ticket updated",
+            timestamp: ticket.lastActivityAt || ticket.lastViewedAt || new Date().toISOString(),
+            read: false,
+            source: "unread",
+          }))
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
   return (
     <header className="fixed top-0 right-0 lg:left-64 h-16 bg-white border-b border-gray-300 px-6 py-4 flex items-center justify-between z-40">
@@ -138,27 +161,27 @@ const DepartmentAdminHeader = ({ onMenuClick }) => {
                     {totalUnreadTickets} ticket{totalUnreadTickets > 1 ? "s" : ""} with updates
                   </div>
                 )}
-                <div className="mt-1 text-xs text-gray-400">
-                  Debug: Notifications: {notifications.length}, Unread: {unreadCount}, Tickets: {totalUnreadTickets}
-                </div>
               </div>
 
               <div className="max-h-64 overflow-y-auto">
-                {notifications.length === 0 ? (
+                {displayNotifications.length === 0 ? (
                   <div className="p-4 text-center text-gray-500">
                     <Bell size={24} className="mx-auto mb-2 text-gray-300" />
                     <p className="text-sm">No notifications</p>
                   </div>
                 ) : (
                   <div className="divide-y divide-gray-100">
-                    {notifications.map((notification) => (
+                    {displayNotifications.map((notification) => (
                       <div
                         key={notification.id}
                         className={`p-4 hover:bg-gray-50 transition-colors cursor-pointer ${
                           !notification.read ? "bg-blue-50 border-l-4 border-l-blue-500" : ""
                         }`}
                         onClick={() => {
-                          // console.log("👁️ [DepartmentalAdminHeader] Notification clicked:", notification.id)
+                          if (notification.source === "unread") {
+                            removeTicketFromUnread(notification.id)
+                            return
+                          }
                           markAsRead(notification.id)
                         }}
                       >
@@ -171,7 +194,7 @@ const DepartmentAdminHeader = ({ onMenuClick }) => {
                             </p>
                           </div>
                           {!notification.read && (
-                            <div className="w-2 h-2 bg-blue-500 rounded-full ml-2 flex-shrink-0"></div>
+                            <div className="w-2 h-2 bg-red-500 rounded-full ml-2 flex-shrink-0"></div>
                           )}
                         </div>
                       </div>
@@ -207,7 +230,11 @@ const DepartmentAdminHeader = ({ onMenuClick }) => {
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-medium text-gray-800">{deptAdmin?.name || "John Doe"}</span>
-            <span className="text-xs text-gray-500 lg:hidden">{deptAdmin?.department || "IT Department"}</span>
+            <span className="text-xs text-gray-500 lg:hidden">
+              {typeof deptAdmin?.department === "object"
+                ? deptAdmin?.department?.name
+                : deptAdmin?.department || "IT Department"}
+            </span>
           </div>
         </div>
       </div>

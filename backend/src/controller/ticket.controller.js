@@ -2,6 +2,7 @@ import Ticket from "../models/Ticket.model.js";
 import Department from "../models/Department.model.js";
 import Employee from "../models/Employee.js";
 import DepartmentalAdmin from "../models/DepartmentalAdmin.model.js";
+import NetworkEngineer from "../models/NetworkEngineer.model.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
@@ -48,19 +49,10 @@ export const raiseTicket = async (req, res) => {
     const isNetworkEngineerTarget = targetDepartmentName === "network engineer";
     const isITTarget = /^it(\s+department)?$/i.test(to_department);
 
-    const networkEngineerDept = await Department.findOne({ name: /network engineer/i });
-
     let notificationRoom = "";
 
     if (isNetworkEngineerTarget || isITTarget) {
-      if (!networkEngineerDept) {
-        return res.status(400).json({
-          message: "Network Engineer department is not configured.",
-        });
-      }
-
-      const engineerExists = await DepartmentalAdmin.findOne({
-        department: networkEngineerDept._id,
+      const engineerExists = await NetworkEngineer.findOne({
         locations: {
           $elemMatch: {
             building: employee.building._id,
@@ -245,8 +237,7 @@ export const updateMyTicket = async (req, res) => {
           });
         }
 
-        const assignedEngineer = await DepartmentalAdmin.findOne({
-          department: dept._id,
+        const assignedEngineer = await NetworkEngineer.findOne({
           locations: {
             $elemMatch: {
               building: employee.building._id,
@@ -680,9 +671,11 @@ export const markTicketAsViewed = async (req, res) => {
 export const getUnreadTicketUpdates = async (req, res) => {
   const startTime = Date.now();
   const { id: adminId, department: deptName } = req.user;
+  const userType = req.user?.userType;
 
   try {
     const isNetworkEngineer = deptName?.toLowerCase() === "network engineer";
+    const isITAdmin = /^it(\s+department)?$/i.test(deptName || "");
     const scopedDepartment = isNetworkEngineer
       ? await Department.findOne({ name: /^it(\s+department)?$/i })
       : await Department.findOne({ name: deptName });
@@ -694,17 +687,50 @@ export const getUnreadTicketUpdates = async (req, res) => {
     let locationEmployeeIds = null;
 
     if (isNetworkEngineer) {
-      const engineer = await DepartmentalAdmin.findById(adminId);
+      const engineer = await NetworkEngineer.findById(adminId);
       if (!engineer || !Array.isArray(engineer.locations) || engineer.locations.length === 0) {
-        return res.status(400).json({ message: "Network Engineer locations not assigned." });
+        return res.status(200).json({ updatedTickets: [], totalUpdatedTickets: 0 });
       }
 
-      const locationFilters = engineer.locations.map((loc) => ({
-        building: loc.building,
-        floor: loc.floor,
-        lab_no: { $in: loc.labs },
-      }));
+      const locationFilters = engineer.locations.map((loc) => {
+        const buildingId =
+          typeof loc.building === "object" ? loc.building?._id : loc.building;
+        const labs = Array.isArray(loc.labs) ? loc.labs : [];
+        const normalizedLabs = labs.flatMap((lab) => {
+          const asString = String(lab);
+          const asNumber = Number(lab);
+          return Number.isNaN(asNumber) ? [asString] : [asString, asNumber];
+        });
+        return {
+          building: buildingId,
+          floor: loc.floor,
+          lab_no: { $in: normalizedLabs },
+        };
+      });
 
+      const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
+      locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
+    } else if (isITAdmin && userType !== "network-engineer") {
+      const admin = await DepartmentalAdmin.findById(adminId);
+      if (!admin || !Array.isArray(admin.locations) || admin.locations.length === 0) {
+        return res.status(200).json({ updatedTickets: [], totalUpdatedTickets: 0 });
+      }
+
+      const locationFilters = admin.locations.map((loc) => {
+        const buildingId =
+          typeof loc.building === "object" ? loc.building?._id : loc.building;
+        const labs = Array.isArray(loc.labs) ? loc.labs : [];
+        const normalizedLabs = labs.flatMap((lab) => {
+          const asString = String(lab);
+          const asNumber = Number(lab);
+          return Number.isNaN(asNumber) ? [asString] : [asNumber, asString];
+        });
+        return {
+          building: buildingId,
+          floor: loc.floor,
+          lab_no: { $in: normalizedLabs },
+        };
+      });
       const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
       locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
     }
@@ -794,6 +820,109 @@ export const getUnreadTicketUpdates = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       message: "Internal server error",
+      error: error.message,
+    });
+  }
+};
+
+export const markAllTicketsAsViewed = async (req, res) => {
+  const { id: adminId, department: deptName } = req.user;
+  const userType = req.user?.userType;
+
+  try {
+    const isNetworkEngineer = deptName?.toLowerCase() === "network engineer";
+    const isITAdmin = /^it(\s+department)?$/i.test(deptName || "");
+    const scopedDepartment = isNetworkEngineer
+      ? await Department.findOne({ name: /^it(\s+department)?$/i })
+      : await Department.findOne({ name: deptName });
+
+    if (!scopedDepartment) {
+      return res.status(404).json({ message: "Department not found" });
+    }
+
+    let locationEmployeeIds = null;
+
+    if (isNetworkEngineer) {
+      const engineer = await NetworkEngineer.findById(adminId);
+      if (!engineer || !Array.isArray(engineer.locations) || engineer.locations.length === 0) {
+        return res.status(200).json({ message: "All tickets marked as viewed.", updatedCount: 0 });
+      }
+
+      const locationFilters = engineer.locations.map((loc) => {
+        const buildingId =
+          typeof loc.building === "object" ? loc.building?._id : loc.building;
+        const labs = Array.isArray(loc.labs) ? loc.labs : [];
+        const normalizedLabs = labs.flatMap((lab) => {
+          const asString = String(lab);
+          const asNumber = Number(lab);
+          return Number.isNaN(asNumber) ? [asString] : [asString, asNumber];
+        });
+        return {
+          building: buildingId,
+          floor: loc.floor,
+          lab_no: { $in: normalizedLabs },
+        };
+      });
+
+      const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
+      locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
+    } else if (isITAdmin && userType !== "network-engineer") {
+      const admin = await DepartmentalAdmin.findById(adminId);
+      if (!admin || !Array.isArray(admin.locations) || admin.locations.length === 0) {
+        return res.status(200).json({ message: "All tickets marked as viewed.", updatedCount: 0 });
+      }
+
+      const locationFilters = admin.locations.map((loc) => {
+        const buildingId =
+          typeof loc.building === "object" ? loc.building?._id : loc.building;
+        const labs = Array.isArray(loc.labs) ? loc.labs : [];
+        const normalizedLabs = labs.flatMap((lab) => {
+          const asString = String(lab);
+          const asNumber = Number(lab);
+          return Number.isNaN(asNumber) ? [asString] : [asNumber, asString];
+        });
+        return {
+          building: buildingId,
+          floor: loc.floor,
+          lab_no: { $in: normalizedLabs },
+        };
+      });
+      const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
+      locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
+    }
+
+    const ticketQuery = {
+      $or: [
+        { assigned_to: adminId },
+        {
+          to_department: scopedDepartment._id,
+          ...(locationEmployeeIds && { raised_by: { $in: locationEmployeeIds } }),
+          status: { $in: ["pending", "in_progress"] },
+        },
+      ],
+    };
+
+    const tickets = await Ticket.find(ticketQuery);
+
+    for (const ticket of tickets) {
+      ticket.admin_views =
+        ticket.admin_views?.filter(
+          (view) => view.admin_id.toString() !== adminId.toString()
+        ) || [];
+      ticket.admin_views.push({
+        admin_id: adminId,
+        last_viewed_at: new Date(),
+      });
+      await ticket.save();
+    }
+
+    return res.status(200).json({
+      message: "All tickets marked as viewed.",
+      updatedCount: tickets.length,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Failed to mark all tickets as viewed",
       error: error.message,
     });
   }

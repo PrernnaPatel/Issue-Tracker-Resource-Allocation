@@ -1,16 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, AlertCircle, User, Calendar, Clock, Building2, Mail, Phone, MapPin, FileText, Download, Eye } from 'lucide-react';
+import {
+  ArrowLeft,
+  AlertCircle,
+  User,
+  Calendar,
+  Clock,
+  Building2,
+  Mail,
+  Phone,
+  MapPin,
+  FileText,
+  Download,
+  Eye,
+  UserPlus,
+} from 'lucide-react';
 import { toast } from 'react-toastify';
-import { getDepartmentTickets, getDepartmentAttachment, updateTicketStatus, markTicketAsViewed } from '../../service/deptAuthService';
-import { useDeptAuth, getIdFromToken } from '../../context/DeptAuthContext';
+import {
+  getDepartmentTickets,
+  getDepartmentAttachment,
+  updateTicketStatus,
+  markTicketAsViewed,
+  getNetworkEngineersForDeptAdmin,
+  assignTicketToEngineer,
+} from '../../service/deptAuthService';
+import { useDeptAuth } from '../../context/DeptAuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 
 const TicketDetail = () => {
   const { ticketId } = useParams();
-  const { token, deptAdmin } = useDeptAuth();
+  const { deptAdmin } = useDeptAuth();
   const { refreshUnreadTickets } = useNotifications();
-  const adminId = getIdFromToken(token);
   const departmentName =
     typeof deptAdmin?.department === 'object'
       ? deptAdmin?.department?.name
@@ -22,11 +42,66 @@ const TicketDetail = () => {
   const [attachmentType, setAttachmentType] = useState(null);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [comment, setComment] = useState('');
-  const [newStatus, setNewStatus] = useState('');
+  const [prioritySelection, setPrioritySelection] = useState('normal');
+  const [priorityUpdating, setPriorityUpdating] = useState(false);
   const [commentAttachment, setCommentAttachment] = useState(null);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignSubmitting, setAssignSubmitting] = useState(false);
+  const [selectedEngineerId, setSelectedEngineerId] = useState('');
+  const [engineers, setEngineers] = useState([]);
   const [previewedCommentIdx, setPreviewedCommentIdx] = useState(null);
   const [previewedCommentUrl, setPreviewedCommentUrl] = useState(null);
   const [previewedCommentType, setPreviewedCommentType] = useState(null);
+
+  const filteredEngineers = useMemo(() => {
+    if (!ticket?.raised_by?.building) return engineers;
+
+    const ticketBuilding =
+      typeof ticket.raised_by.building === 'object'
+        ? ticket.raised_by.building
+        : { _id: ticket.raised_by.building, name: ticket.raised_by.building };
+
+    const ticketBuildingId = ticketBuilding?._id;
+    const ticketBuildingName =
+      typeof ticketBuilding?.name === 'string' ? ticketBuilding.name : null;
+
+    return engineers.filter((engineer) => {
+      const locations = Array.isArray(engineer.locations) ? engineer.locations : [];
+      return locations.some((loc) => {
+        const locBuilding =
+          typeof loc.building === 'object'
+            ? loc.building
+            : { _id: loc.building, name: loc.building };
+
+        const locBuildingId = locBuilding?._id;
+        const locBuildingName =
+          typeof locBuilding?.name === 'string' ? locBuilding.name : null;
+
+        if (ticketBuildingId && locBuildingId) {
+          return String(locBuildingId) === String(ticketBuildingId);
+        }
+
+        if (ticketBuildingName && locBuildingName) {
+          return (
+            ticketBuildingName.toLowerCase().trim() ===
+            locBuildingName.toLowerCase().trim()
+          );
+        }
+
+        return false;
+      });
+    });
+  }, [engineers, ticket]);
+
+  useEffect(() => {
+    if (
+      selectedEngineerId &&
+      !filteredEngineers.some((engineer) => engineer._id === selectedEngineerId)
+    ) {
+      setSelectedEngineerId('');
+    }
+  }, [filteredEngineers, selectedEngineerId]);
 
   useEffect(() => {
     const fetchTicketDetails = async () => {
@@ -64,6 +139,34 @@ const TicketDetail = () => {
     }
   }, [ticketId]); // Removed refreshUnreadTickets from dependencies to prevent infinite loop
 
+  useEffect(() => {
+    if (ticket?.priority) {
+      setPrioritySelection(ticket.priority);
+    }
+  }, [ticket?.priority]);
+
+  useEffect(() => {
+    const fetchEngineers = async () => {
+      try {
+        setAssignLoading(true);
+        const result = await getNetworkEngineersForDeptAdmin();
+        if (result.success) {
+          setEngineers(result.engineers || []);
+        } else {
+          toast.error(result.message || 'Failed to load network engineers');
+        }
+      } catch (error) {
+        toast.error(error.message || 'Failed to load network engineers');
+      } finally {
+        setAssignLoading(false);
+      }
+    };
+
+    if (assignOpen && engineers.length === 0) {
+      fetchEngineers();
+    }
+  }, [assignOpen, engineers.length]);
+
   // Clean up attachment URL on unmount
   useEffect(() => {
     return () => {
@@ -79,16 +182,25 @@ const TicketDetail = () => {
   const getStatusColor = (status) => {
     switch (status) {
       case 'pending':
-        return { bg: 'bg-red-100', text: 'text-red-800', border: 'border-red-200' };
-      case 'in_progress':
-        return { bg: 'bg-teal-100', text: 'text-teal-800', border: 'border-teal-200' };
-      case 'resolved':
         return { bg: 'bg-blue-100', text: 'text-blue-800', border: 'border-blue-200' };
-      case 'revoked':
+      case 'in_progress':
+        return { bg: 'bg-yellow-100', text: 'text-yellow-800', border: 'border-yellow-200' };
+      case 'resolved':
         return { bg: 'bg-green-100', text: 'text-green-800', border: 'border-green-200' };
+      case 'revoked':
+        return { bg: 'bg-red-100', text: 'text-red-800', border: 'border-red-200' };
       default:
         return { bg: 'bg-gray-100', text: 'text-gray-800', border: 'border-gray-200' };
     }
+  };
+
+  const getPriorityLabel = (priority) => {
+    if (!priority) return 'N/A';
+    if (priority === 'low') return 'Low';
+    if (priority === 'normal') return 'Medium';
+    if (priority === 'high') return 'High';
+    if (priority === 'urgent') return 'Urgent';
+    return priority;
   };
 
   const getStatusIcon = (status) => {
@@ -193,24 +305,24 @@ const TicketDetail = () => {
     }
   };
 
-  const handleStatusUpdate = async (e) => {
-    e.preventDefault();
-    if (!newStatus) return toast.error('Please select a status');
-    setStatusUpdating(true);
-    const result = await updateTicketStatus(ticket._id, { status: newStatus });
-    setStatusUpdating(false);
+  const handlePriorityUpdate = async () => {
+    if (!prioritySelection) return toast.error('Please select a priority');
+    setPriorityUpdating(true);
+    const result = await updateTicketStatus(ticket._id, {
+      priority: prioritySelection,
+    });
+    setPriorityUpdating(false);
     if (result.success) {
       setTicket(result.ticket);
-      toast.success('Status updated successfully');
-      setNewStatus('');
+      toast.success('Priority updated successfully');
     } else {
-      toast.error(result.message || 'Failed to update status');
+      toast.error(result.message || 'Failed to update priority');
     }
   };
 
   const handleAddComment = async (e) => {
     e.preventDefault();
-    if (!comment.trim() && !commentAttachment) return toast.error('Comment or attachment required');
+    if (!comment.trim()) return toast.error('Comment is required');
     setStatusUpdating(true);
     const result = await updateTicketStatus(ticket._id, { comment }, commentAttachment);
     setStatusUpdating(false);
@@ -221,6 +333,23 @@ const TicketDetail = () => {
       toast.success('Comment added successfully');
     } else {
       toast.error(result.message || 'Failed to add comment');
+    }
+  };
+
+  const handleAssignManually = async () => {
+    if (!selectedEngineerId) {
+      return toast.error('Please select a Network Engineer');
+    }
+    setAssignSubmitting(true);
+    const result = await assignTicketToEngineer(ticket._id, selectedEngineerId);
+    setAssignSubmitting(false);
+    if (result.success) {
+      setTicket(result.ticket);
+      toast.success('Ticket assigned successfully');
+      setAssignOpen(false);
+      setSelectedEngineerId('');
+    } else {
+      toast.error(result.message || 'Failed to assign ticket');
     }
   };
 
@@ -309,48 +438,94 @@ const TicketDetail = () => {
               </div>
             </div>
 
-            {/* Ticket Details Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-              <div className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">From Department</h3>
-                  <div className="flex items-center gap-2">
-                    <Building2 size={16} className="text-gray-400" />
-                    <span className="text-gray-900">{ticket.from_department}</span>
-                  </div>
-                </div>
-                
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">To Department</h3>
-                  <div className="flex items-center gap-2">
-                    <Building2 size={16} className="text-gray-400" />
-                    <span className="text-gray-900">{ticket.to_department?.name || ticket.to_department}</span>
-                  </div>
-                </div>
-              </div>
+            {(() => {
+              const buildingName =
+                typeof ticket.raised_by?.building === 'object'
+                  ? ticket.raised_by?.building?.name
+                  : ticket.raised_by?.building;
+              const floorValue = ticket.raised_by?.floor;
+              const roomValue = ticket.raised_by?.lab_no || ticket.raised_by?.lab;
+              const assignedResolver =
+                typeof ticket.assigned_to === 'object'
+                  ? ticket.assigned_to?.name
+                  : ticket.assigned_to;
 
-              <div className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Created</h3>
-                  <div className="flex items-center gap-2">
-                    <Calendar size={16} className="text-gray-400" />
-                    <span className="text-gray-900">
-                      {new Date(ticket.createdAt).toLocaleDateString()} at {new Date(ticket.createdAt).toLocaleTimeString()}
-                    </span>
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Location</h3>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-gray-900">
+                        <div className="flex items-center gap-2">
+                          <MapPin size={16} className="text-gray-400" />
+                          <span className="font-medium">Building:</span>
+                          <span>{buildingName || 'N/A'}</span>
+                        </div>
+                        <span className="text-gray-400">|</span>
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium">Floor:</span>
+                          <span>{floorValue ?? 'N/A'}</span>
+                        </div>
+                        <span className="text-gray-400">|</span>
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium">Lab:</span>
+                          <span>{roomValue ?? 'N/A'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">From Department</h3>
+                      <div className="flex items-center gap-2">
+                        <Building2 size={16} className="text-gray-400" />
+                        <span className="text-gray-900">{ticket.from_department}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">To Department</h3>
+                      <div className="flex items-center gap-2">
+                        <Building2 size={16} className="text-gray-400" />
+                        <span className="text-gray-900">{ticket.to_department?.name || ticket.to_department}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Assigned Resolver</h3>
+                      <div className="flex items-center gap-2">
+                        <User size={16} className="text-gray-400" />
+                        <span className="text-gray-900">{assignedResolver || 'N/A'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Created</h3>
+                      <div className="flex items-center gap-2">
+                        <Calendar size={16} className="text-gray-400" />
+                        <span className="text-gray-900">
+                          {new Date(ticket.createdAt).toLocaleDateString()} at {new Date(ticket.createdAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Last Updated</h3>
+                      <div className="flex items-center gap-2">
+                        <Clock size={16} className="text-gray-400" />
+                        <span className="text-gray-900">
+                          {new Date(ticket.updatedAt || ticket.createdAt).toLocaleDateString()} at {new Date(ticket.updatedAt || ticket.createdAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Priority</h3>
+                      <div className="flex items-center gap-2">
+                        <AlertCircle size={16} className="text-gray-400" />
+                        <span className="text-gray-900">{getPriorityLabel(ticket.priority)}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Last Updated</h3>
-                  <div className="flex items-center gap-2">
-                    <Clock size={16} className="text-gray-400" />
-                    <span className="text-gray-900">
-                      {new Date(ticket.createdAt).toLocaleDateString()} at {new Date(ticket.createdAt).toLocaleTimeString()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
+              );
+            })()}
           </div>
 
           {/* Requester Information */}
@@ -548,85 +723,73 @@ const TicketDetail = () => {
             )}
           </div>
 
-          {/* Action Buttons */}
+          {/* Action Section */}
           <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions</h3>
-            <div className="flex flex-col md:flex-row flex-wrap gap-4">
-              {/* Status Update Form */}
-              {!isWatchOnlyDepartment && ticket.status !== 'resolved' && ticket.status !== 'revoked' && (
-                <>
-                  {/* Restrict status change for in_progress tickets to only if assigned_to matches adminId from token */}
-                  {ticket.status === 'in_progress' && adminId && (String(ticket.assigned_to) !== String(adminId)) ? (
-                    <div className="flex flex-col gap-2">
-                      <select
-                        disabled
-                        className="px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-400"
-                      >
-                        <option value="">Select status</option>
-                        <option value="pending">Pending</option>
-                        <option value="in_progress">In Progress</option>
-                        <option value="resolved">Resolved</option>
-                      </select>
-                      <button
-                        type="button"
-                        disabled
-                        className="px-4 py-2 rounded-lg bg-gray-300 text-gray-500 cursor-not-allowed"
-                      >
-                        Update Status
-                      </button>
-                      <span className="text-sm text-red-500 mt-1">
-                        Only the assigned admin can change the status of this ticket while it is in progress.
-                      </span>
-                    </div>
-                  ) : (
-                    <form onSubmit={handleStatusUpdate} className="flex items-center gap-2">
-                      <select
-                        value={newStatus}
-                        onChange={e => setNewStatus(e.target.value)}
-                        disabled={statusUpdating}
-                        className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                      >
-                        <option value="">Select status</option>
-                        <option value="pending">Pending</option>
-                        <option value="in_progress">In Progress</option>
-                        <option value="resolved">Resolved</option>
-                      </select>
-                      <button
-                        type="submit"
-                        disabled={statusUpdating || !newStatus}
-                        className={`px-4 py-2 rounded-lg transition-colors ${
-                          statusUpdating || !newStatus
-                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                            : 'bg-blue-500 text-white hover:bg-blue-600'
-                        }`}
-                      >
-                        {statusUpdating ? 'Updating...' : 'Update Status'}
-                      </button>
-                    </form>
-                  )}
-                </>
-              )}
-              {/* Add Comment Form */}
-              {!isWatchOnlyDepartment && (
-                <form onSubmit={handleAddComment} className="flex items-center gap-2 w-full md:w-auto">
-                  <input
-                    type="text"
+            <div className="space-y-6">
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+                  Priority Update
+                </h4>
+                <div className="flex flex-col md:flex-row md:items-center gap-3">
+                  <select
+                    value={prioritySelection}
+                    onChange={(e) => setPrioritySelection(e.target.value)}
+                    disabled={ticket.status === 'revoked' || priorityUpdating}
+                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent"
+                  >
+                    <option value="">Select Priority</option>
+                    <option value="low">Low</option>
+                    <option value="normal">Medium</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handlePriorityUpdate}
+                    disabled={ticket.status === 'revoked' || priorityUpdating || !prioritySelection}
+                    className={`px-4 py-2 rounded-lg transition-colors ${
+                      ticket.status === 'revoked' || priorityUpdating || !prioritySelection
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-purple-600 text-white hover:bg-purple-700'
+                    }`}
+                  >
+                    {priorityUpdating ? 'Updating...' : 'Update Priority'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+                  Comment
+                </h4>
+                <form onSubmit={handleAddComment} className="space-y-3">
+                  <textarea
                     value={comment}
-                    onChange={e => setComment(e.target.value)}
+                    onChange={(e) => setComment(e.target.value)}
                     placeholder="Add a comment..."
+                    rows={4}
                     disabled={ticket.status === 'revoked' || statusUpdating}
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent resize-none"
                   />
-                  <input
-                    type="file"
-                    accept="image/*,application/pdf"
-                    onChange={e => setCommentAttachment(e.target.files[0] || null)}
-                    className="block text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-gray-100 file:text-gray-700 mt-2"
-                  />
+                  <div className="flex flex-col md:flex-row md:items-center gap-3">
+                    <label className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf"
+                        onChange={(e) => setCommentAttachment(e.target.files[0] || null)}
+                        className="hidden"
+                      />
+                      Choose File
+                    </label>
+                    {commentAttachment && (
+                      <span className="text-sm text-gray-500">{commentAttachment.name}</span>
+                    )}
+                  </div>
                   <button
                     type="submit"
                     disabled={ticket.status === 'revoked' || statusUpdating || !comment.trim()}
-                    className={`px-4 py-2 rounded-lg transition-colors ${
+                    className={`w-full px-4 py-2 rounded-lg transition-colors ${
                       ticket.status === 'revoked' || statusUpdating || !comment.trim()
                         ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                         : 'bg-purple-500 text-white hover:bg-purple-600'
@@ -635,23 +798,78 @@ const TicketDetail = () => {
                     {statusUpdating ? 'Adding...' : 'Add Comment'}
                   </button>
                 </form>
-              )}
-              {isWatchOnlyDepartment && (
-                <div className="w-full mt-1 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <p className="text-sm text-blue-800">
-                    <strong>Watch-only:</strong> IT departmental admins can view ticket activity. Network engineers handle status updates and comments.
-                  </p>
-                </div>
-              )}
+              </div>
+
+              <div className="w-full p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm text-blue-800">
+                  <strong>Note:</strong> As an IT Departmental Admin, you can update ticket priority, add comments, and assign Network Engineers. Ticket status updates are managed by Network Engineers.
+                </p>
+              </div>
+
               {ticket.status === 'revoked' && (
-                <div className="w-full mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <div className="w-full p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                   <p className="text-sm text-yellow-800">
-                    <strong>Note:</strong> This ticket has been revoked. Status updates and comments are disabled.
+                    <strong>Note:</strong> This ticket has been revoked. Priority updates and comments are disabled.
                   </p>
                 </div>
               )}
             </div>
           </div>
+
+          {isWatchOnlyDepartment && (
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Assign Network Engineer</h3>
+              <button
+                type="button"
+                onClick={() => setAssignOpen((prev) => !prev)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700"
+              >
+                <UserPlus size={16} />
+                Assign Manually
+              </button>
+              <p className="text-sm text-gray-500 mt-2">
+                If no Network Engineer accepts this ticket, you can manually assign it here.
+              </p>
+
+              {assignOpen && (
+                <div className="mt-4 space-y-3">
+                  <select
+                    value={selectedEngineerId}
+                    onChange={(e) => setSelectedEngineerId(e.target.value)}
+                    disabled={assignLoading || assignSubmitting}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  >
+                    <option value="">Select Network Engineer</option>
+                    {filteredEngineers.map((engineer) => (
+                      <option key={engineer._id} value={engineer._id}>
+                        {engineer.name} ({engineer.email})
+                      </option>
+                    ))}
+                  </select>
+                  {!assignLoading && filteredEngineers.length === 0 && (
+                    <p className="text-sm text-gray-500">
+                      No network engineers found for this building.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleAssignManually}
+                    disabled={assignLoading || assignSubmitting || !selectedEngineerId}
+                    className={`px-4 py-2 rounded-lg transition-colors ${
+                      assignLoading || assignSubmitting || !selectedEngineerId
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-purple-600 text-white hover:bg-purple-700'
+                    }`}
+                  >
+                    {assignSubmitting ? 'Assigning...' : 'Assign Ticket'}
+                  </button>
+                  {assignLoading && (
+                    <p className="text-sm text-gray-500">Loading network engineers...</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

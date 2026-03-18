@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "backfill:manual-assignments": "node scripts/backfill-manual-assignments.js",
+    "migrate:network-engineers": "node scripts/migrate-network-engineers.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Search, Filter, Eye, Clock, CheckCircle2, XCircle, Activity, Ticket } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getDepartmentTickets } from '../../service/deptAuthService';
+import { getDepartmentTickets, markAllTicketUpdatesAsViewed } from '../../service/deptAuthService';
 import { useDeptAuth } from '../../context/DeptAuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { toast } from 'react-toastify';
@@ -102,6 +102,21 @@ const DepartmentTickets = () => {
     }
   };
 
+  const getRowBg = (status) => {
+    switch (status) {
+      case 'pending':
+        return 'bg-blue-50';
+      case 'in_progress':
+        return 'bg-yellow-50';
+      case 'resolved':
+        return 'bg-green-50';
+      case 'revoked':
+        return 'bg-red-50';
+      default:
+        return 'bg-white';
+    }
+  };
+
   const getStatusIcon = (status) => {
     switch (status) {
       case 'pending':
@@ -168,6 +183,17 @@ const DepartmentTickets = () => {
     toast.success('Tickets refreshed successfully');
   };
 
+  const handleMarkAllAsRead = async () => {
+    const result = await markAllTicketUpdatesAsViewed();
+    if (!result.success) {
+      toast.error(result.message || 'Failed to mark all as read');
+      return;
+    }
+    await refreshUnreadTickets();
+    await fetchTickets();
+    toast.success('All tickets marked as read');
+  };
+
   return (
     <div className="p-6 max-w-[1600px] mx-auto">
       {/* Header */}
@@ -175,10 +201,18 @@ const DepartmentTickets = () => {
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Department Tickets</h1>
           <p className="text-gray-600">
-            {deptAdmin?.department || 'Department'} - Manage and track all tickets
+            {typeof deptAdmin?.department === 'object'
+              ? deptAdmin?.department?.name
+              : deptAdmin?.department || 'Department'} - Manage and track all tickets
           </p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={handleMarkAllAsRead}
+            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
+          >
+            Mark All as Read
+          </button>
           <button
             onClick={handleRefresh}
             className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
@@ -277,6 +311,28 @@ const DepartmentTickets = () => {
         </div>
       </div>
 
+      {/* Color Codes Legend */}
+      <div className="mb-4 bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-3">
+        <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+          <span className="font-semibold text-gray-700">Color Codes:</span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 rounded-full bg-blue-300"></span> Pending
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 rounded-full bg-yellow-300"></span> In Progress
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 rounded-full bg-green-300"></span> Resolved
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 rounded-full bg-red-300"></span> Revoked
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 rounded-full bg-orange-400"></span> Unread
+          </span>
+        </div>
+      </div>
+
       {/* Tickets Table */}
       <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
         <div className="overflow-x-auto">
@@ -347,27 +403,24 @@ const DepartmentTickets = () => {
                   const statusColors = getStatusColor(ticket.status);
                   const isUnread = hasUnreadUpdates(ticket._id);
                   const unreadCount = getUnreadCount(ticket._id);
+                  const rowBg = getRowBg(ticket.status);
                   
                   return (
                     <tr 
                       key={ticket._id} 
-                      className={`hover:bg-gray-50 transition-colors cursor-pointer ${isUnread ? 'bg-blue-50' : ''}`}
+                      className={`${rowBg} hover:brightness-95 transition-colors cursor-pointer`}
                       onClick={() => handleTicketClick(ticket._id)}
                     >
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           {isUnread && (
-                            <div className="flex items-center justify-center w-3 h-3 bg-red-500 rounded-full flex-shrink-0">
-                              <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
-                            </div>
+                            <div className="flex items-center justify-center w-3 h-3 bg-orange-400 rounded-full flex-shrink-0"></div>
                           )}
                           <div>
                             <h3 className="text-sm font-semibold text-gray-900">{ticket.title}</h3>
-                            {isUnread && (
-                              <p className="text-xs text-red-600 font-medium mt-1">
-                                {unreadCount} new update{unreadCount > 1 ? 's' : ''}
-                              </p>
-                            )}
+                            <p className={`text-xs font-medium mt-1 ${isUnread ? 'text-red-600' : 'text-gray-500'}`}>
+                              {unreadCount} new update{unreadCount === 1 ? '' : 's'}
+                            </p>
                           </div>
                         </div>
                       </td>

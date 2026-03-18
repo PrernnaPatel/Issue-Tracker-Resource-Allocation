@@ -36,6 +36,15 @@ const TicketCard = ({ ticket, onViewTicket, unreadTickets }) => {
   const isUnread = hasUnreadUpdates(ticket._id);
   const unreadCount = getUnreadCount(ticket._id);
   
+  const statusMeta = {
+    pending: { label: "Pending", classes: "bg-blue-100 text-blue-700 border-blue-200", icon: Activity },
+    in_progress: { label: "In Progress", classes: "bg-yellow-100 text-yellow-700 border-yellow-200", icon: AlertCircle },
+    resolved: { label: "Resolved", classes: "bg-green-100 text-green-700 border-green-200", icon: CheckCircle2 },
+    revoked: { label: "Revoked", classes: "bg-red-100 text-red-700 border-red-200", icon: XCircle },
+  };
+  const currentStatus = statusMeta[ticket.status] || statusMeta.pending;
+  const StatusIcon = currentStatus.icon || Activity;
+
   return (
     <div className={`group bg-white rounded-2xl border transition-all duration-300 hover:shadow-xl hover:-translate-y-1 cursor-pointer overflow-hidden ${
       isUnread ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
@@ -69,24 +78,30 @@ const TicketCard = ({ ticket, onViewTicket, unreadTickets }) => {
           </button>
         </div>
         <div className="flex items-center gap-3 mb-4">
-          
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 border border-blue-200">
-            <Activity size={12} />
-            In Progress
+          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${currentStatus.classes}`}>
+            <StatusIcon size={12} />
+            {currentStatus.label}
           </span>
         </div>
         {/* User info */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="space-y-2">
             <div>
               <p className="text-sm font-medium text-gray-900">{ticket.raised_by?.name}</p>
               <p className="text-xs text-gray-500">{ticket.raised_by?.email}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-gray-400">Assigned To</p>
+              <p className="text-sm font-medium text-gray-900">
+                {ticket.assigned_to?.name || "Not assigned"}
+              </p>
+              <p className="text-xs text-gray-500">{ticket.assigned_to?.email || ""}</p>
             </div>
           </div>
           <div className="text-right">
             <div className="flex items-center gap-1 text-xs text-gray-500 mb-1">
               <Clock size={12} />
-              {getTimeAgo(ticket.createdAt)}
+              {ticket.assigned_at ? new Date(ticket.assigned_at).toLocaleString() : getTimeAgo(ticket.createdAt)}
             </div>
             <button className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors font-medium" onClick={() => onViewTicket(ticket._id)}>
               <Eye size={14} />
@@ -122,9 +137,9 @@ const TicketAssigned = () => {
       setLoading(true);
       const result = await getDepartmentTickets();
       if (result.success) {
-        // Only in_progress tickets assigned to this admin
-        const inProgressTickets = (result.tickets || [])
-          .filter(ticket => ticket.status === 'in_progress' && String(ticket.assigned_to) === String(adminId))
+        // Only manually assigned tickets
+        const assignedTickets = (result.tickets || [])
+          .filter(ticket => ticket.assigned_manually === true && ticket.assigned_to)
           .map(ticket => ({
             ...ticket,
             raised_by: {
@@ -132,7 +147,7 @@ const TicketAssigned = () => {
               avatar: ticket.raised_by?.avatar || getInitials(ticket.raised_by?.name)
             }
           }));
-        setTickets(inProgressTickets);
+        setTickets(assignedTickets);
       } else {
         toast.error(result.message || 'Failed to fetch tickets');
       }
@@ -289,14 +304,23 @@ const TicketAssigned = () => {
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Title</th>
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Description</th>
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Raised By</th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Assigned To</th>
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Status</th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Created</th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Actions</th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Assigned At</th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase border-b border-gray-100">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredTickets.map((ticket, idx) => {
                   const isUnread = unreadTickets.some(t => t.ticketId === ticket._id);
+                  const statusMeta = {
+                    pending: { label: "Pending", classes: "bg-blue-100 text-blue-700 border-blue-200", icon: Activity },
+                    in_progress: { label: "In Progress", classes: "bg-yellow-100 text-yellow-700 border-yellow-200", icon: AlertCircle },
+                    resolved: { label: "Resolved", classes: "bg-green-100 text-green-700 border-green-200", icon: CheckCircle2 },
+                    revoked: { label: "Revoked", classes: "bg-red-100 text-red-700 border-red-200", icon: XCircle },
+                  };
+                  const currentStatus = statusMeta[ticket.status] || statusMeta.pending;
+                  const StatusIcon = currentStatus.icon || Activity;
                   return (
                     <tr
                       key={ticket._id}
@@ -320,12 +344,18 @@ const TicketAssigned = () => {
                         <div className="text-xs text-gray-400">{ticket.raised_by?.email || ''}</div>
                       </td>
                       <td className="px-6 py-4">
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 border border-blue-200">
-                          <Activity size={12} />
-                          In Progress
+                        <div className="text-sm text-gray-900 font-medium">{ticket.assigned_to?.name || 'N/A'}</div>
+                        <div className="text-xs text-gray-400">{ticket.assigned_to?.email || ''}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${currentStatus.classes}`}>
+                          <StatusIcon size={12} />
+                          {currentStatus.label}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-xs text-gray-500">{new Date(ticket.createdAt).toLocaleDateString()}</td>
+                      <td className="px-6 py-4 text-xs text-gray-500">
+                        {ticket.assigned_at ? new Date(ticket.assigned_at).toLocaleString() : 'N/A'}
+                      </td>
                       <td className="px-6 py-4">
                         <button
                           onClick={() => handleViewTicket(ticket._id)}

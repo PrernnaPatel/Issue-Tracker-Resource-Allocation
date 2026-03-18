@@ -18,12 +18,15 @@ import DepartmentalAdmins from './pages/DepartmentalAdmins';
 import NetworkEngineers from './pages/NetworkEngineers';
 import TicketDetail from './pages/TicketDetail';
 import AdminLayout from './layout/AdminLayout';
-import DeptDashboard from './pages/Dept/Dashboard';
+import DeptDashboardRoute from './pages/Dept/DashboardRoute';
 import DepartmentTickets from './pages/Dept/Tickets';
 import DeptReports from './pages/Dept/Reports';
 import DeptNetworkEngineers from './pages/Dept/NetworkEngineers';
 import DepartmentTicketDetail from './pages/Dept/TicketDetail';
 import TicketAssigned from './pages/Dept/TicketAssigned';
+import DeptProfile from './pages/Dept/Profile';
+import DeptChangePassword from './pages/Dept/ChangePassword';
+import NetworkEngineerTicketDetail from './pages/Dept/NetworkEngineerTicketDetail';
 import DepartmentLayout from './layout/DepartmentLayout';
 import { DeptSocketProvider } from './context/DeptSocketContext';
 import Inventory from './pages/Dept/Inventory';
@@ -126,7 +129,7 @@ const App = () => {
             path="dashboard"
             element={
               <div>
-                <DeptDashboard />
+                <DeptDashboardRoute />
               </div>
             }
           />
@@ -137,6 +140,10 @@ const App = () => {
           <Route
             path="tickets/:ticketId"
             element={<DepartmentTicketDetail />}
+          />
+          <Route
+            path="my-tickets/:ticketId"
+            element={<NetworkEngineerTicketDetail />}
           />
           <Route
             path="reports"
@@ -161,6 +168,14 @@ const App = () => {
           <Route
             path="inventory/:id"
             element={<InventoryDetail />}
+          />
+          <Route
+            path="profile"
+            element={<DeptProfile />}
+          />
+          <Route
+            path="change-password"
+            element={<DeptChangePassword />}
           />
           <Route
             path="*"

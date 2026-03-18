@@ -9,6 +9,7 @@ import OtpAttempt from "../models/OtpAttempt.model.js";
 import jwt from "jsonwebtoken";
 import Ticket from "../models/Ticket.model.js";
 import Employee from "../models/Employee.js";
+import NetworkEngineer from "../models/NetworkEngineer.model.js";
 import InventorySystem from "../models/InventorySystem.model.js";
 import { Building } from "../models/Building.model.js";
 import { updateBuilding } from "./admin.controller.js";
@@ -28,10 +29,25 @@ const isITDepartment = (departmentName = "") =>
 
 const getTicketScopeDepartment = async (departmentName) => {
   if (isNetworkEngineerDepartment(departmentName)) {
-    return Department.findOne({ name: IT_DEPARTMENT_REGEX });
+    const [itDepartment, networkDepartment] = await Promise.all([
+      Department.findOne({ name: IT_DEPARTMENT_REGEX }),
+      Department.findOne({
+        name: new RegExp(`^${NETWORK_ENGINEER_DEPARTMENT_NAME}$`, "i"),
+      }),
+    ]);
+
+    const departments = [itDepartment, networkDepartment].filter(Boolean);
+    return {
+      primary: itDepartment || networkDepartment || null,
+      all: departments,
+    };
   }
 
-  return Department.findOne({ name: departmentName });
+  const department = await Department.findOne({ name: departmentName });
+  return {
+    primary: department,
+    all: department ? [department] : [],
+  };
 };
 
 export const deptAdminLoginRequestOtp = async (req, res) => {
@@ -39,24 +55,28 @@ export const deptAdminLoginRequestOtp = async (req, res) => {
 
   try {
     const admin = await DepartmentalAdmin.findOne({ email });
-    if (!admin) {
+    const engineer = admin ? null : await NetworkEngineer.findOne({ email });
+    const account = admin || engineer;
+    const isNetworkEngineer = Boolean(engineer);
+
+    if (!account) {
       return res.status(404).json({ message: "Departmental admin not found." });
     }
 
-    const isPasswordValid = await bcrypt.compare(password, admin.password);
+    const isPasswordValid = await bcrypt.compare(password, account.password);
     if (!isPasswordValid) {
       return res.status(401).json({ message: "Invalid Credentials." });
     }
     await logAction({
       action: "FAILED_LOGIN",
-      performedBy: null,
+      performedBy: account?._id || null,
       description: `Failed login attempt with email "${email}" (invalid password).`,
     });
     const nowIST = moment().tz("Asia/Kolkata");
     const todayDateIST = nowIST.format("YYYY-MM-DD");
 
     //If first time login
-    if (admin.isFirstLogin) {
+    if (account.isFirstLogin) {
       await OTP.deleteMany({ email, role: "departmental-admin" });
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       await OTP.create({
@@ -109,8 +129,8 @@ export const deptAdminLoginRequestOtp = async (req, res) => {
     await sendOtp(email, otp);
     await logAction({
       action: "LOGIN_OTP_REQUEST",
-      performedBy: admin._id,
-      description: `OTP login requested by departmental admin (${email}).`,
+      performedBy: account._id,
+      description: `OTP login requested by ${isNetworkEngineer ? "network engineer" : "departmental admin"} (${email}).`,
     });
     return res.status(200).json({
       message: "OTP sent to your email",
@@ -187,16 +207,26 @@ export const deptAdminVerifyOtpAndLogin = async (req, res) => {
       return res.status(400).json({ message: "Invalid or expired OTP" });
     }
 
-    // 3. Fetch admin in one call and check existence
-    const admin = await DepartmentalAdmin.findOne({ email }).populate(
-      "department"
-    );
-    if (!admin) {
+    // 3. Fetch admin / engineer and check existence
+    const admin = await DepartmentalAdmin.findOne({ email }).populate("department");
+    const engineer = admin
+      ? null
+      : await NetworkEngineer.findOne({ email })
+          .populate({
+            path: "itDepartmentAdmin",
+            select: "name email department",
+            populate: { path: "department", select: "name" },
+          })
+          .populate("locations.building", "name code");
+    const account = admin || engineer;
+    const isNetworkEngineer = Boolean(engineer);
+
+    if (!account) {
       return res.status(404).json({ message: "Departmental admin not found" });
     }
 
     // 4. If it's first login, check OTP expiry (5 min)
-    if (admin.isFirstLogin) {
+    if (account.isFirstLogin) {
       const otpCreated = moment(record.createdAt);
       const now = moment();
       const diffInMinutes = now.diff(otpCreated, "minutes");
@@ -219,11 +249,14 @@ export const deptAdminVerifyOtpAndLogin = async (req, res) => {
 
     const token = jwt.sign(
       {
-        id: admin._id,
-        department: admin.department.name,
-        email: admin.email,
+        id: account._id,
+        department: isNetworkEngineer
+          ? "Network Engineer"
+          : admin?.department?.name || "",
+        email: account.email,
         role: "departmental-admin",
-        isFirstLogin: admin.isFirstLogin,
+        userType: isNetworkEngineer ? "network-engineer" : "departmental-admin",
+        isFirstLogin: account.isFirstLogin,
       },
       process.env.JWT_SECRET,
       { expiresIn: secondsUntilMidnight }
@@ -234,8 +267,8 @@ export const deptAdminVerifyOtpAndLogin = async (req, res) => {
 
     await logAction({
       action: "LOGIN_SUCCESS",
-      performedBy: admin._id,
-      description: `Departmental Admin (${admin.email}) logged in successfully via OTP.`,
+      performedBy: account._id,
+      description: `${isNetworkEngineer ? "Network Engineer" : "Departmental Admin"} (${account.email}) logged in successfully via OTP.`,
     });
 
     // 7. Respond with token and user details
@@ -243,10 +276,16 @@ export const deptAdminVerifyOtpAndLogin = async (req, res) => {
       message: "OTP verified, login successful",
       token,
       admin: {
-        name: admin.name,
-        email: admin.email,
-        department: admin.department.name,
-        isFirstLogin: admin.isFirstLogin,
+        _id: account._id,
+        name: account.name,
+        email: account.email,
+        department: isNetworkEngineer
+          ? { name: "Network Engineer" }
+          : admin?.department,
+        itDepartmentAdmin: isNetworkEngineer ? engineer?.itDepartmentAdmin : undefined,
+        locations: isNetworkEngineer ? engineer?.locations : undefined,
+        isFirstLogin: account.isFirstLogin,
+        isNetworkEngineer,
       },
     });
   } catch (e) {
@@ -263,20 +302,23 @@ export const changePassword = async (req, res) => {
 
   try {
     const admin = await DepartmentalAdmin.findOne({ email });
-    if (!admin || !admin.isFirstLogin) {
+    const engineer = admin ? null : await NetworkEngineer.findOne({ email });
+    const account = admin || engineer;
+    const isNetworkEngineer = Boolean(engineer);
+    if (!account || !account.isFirstLogin) {
       return res.status(404).json({ message: "Departmental Admin not found." });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    admin.password = hashedPassword;
-    admin.isFirstLogin = false;
-    await admin.save();
+    account.password = hashedPassword;
+    account.isFirstLogin = false;
+    await account.save();
 
     await logAction({
       action: "PASSWORD_CHANGED",
-      performedBy: admin._id,
-      description: `Departmental Admin (${admin.email}) changed password after first login.`,
+      performedBy: account._id,
+      description: `${isNetworkEngineer ? "Network Engineer" : "Departmental Admin"} (${account.email}) changed password after first login.`,
     });
 
     return res.status(200).json({
@@ -293,32 +335,61 @@ export const changePassword = async (req, res) => {
 export const getLoggedInDepartmentalAdmin = async (req, res) => {
   try {
     const adminId = req.user.id;
+    const userType = req.user?.userType;
+    let admin = null;
+    let isNetworkEngineer = false;
 
-    const admin = await DepartmentalAdmin.findById(adminId)
-      .populate("department", "name description")
-      .populate("locations.building", "name code") // for network engineer
-      .select("-password");
+    if (userType === "network-engineer") {
+      admin = await NetworkEngineer.findById(adminId)
+        .populate({
+          path: "itDepartmentAdmin",
+          select: "name email department",
+          populate: { path: "department", select: "name" },
+        })
+        .populate("locations.building", "name code")
+        .select("-password");
+      isNetworkEngineer = true;
+    } else {
+      admin = await DepartmentalAdmin.findById(adminId)
+        .populate("department", "name description")
+        .populate({
+          path: "itDepartmentAdmin",
+          select: "name email department",
+          populate: { path: "department", select: "name" },
+        })
+        .populate("locations.building", "name code")
+        .select("-password");
+    }
+
+    if (!admin) {
+      // Fallback: try the other collection if token did not include userType
+      admin = await NetworkEngineer.findById(adminId)
+        .populate({
+          path: "itDepartmentAdmin",
+          select: "name email department",
+          populate: { path: "department", select: "name" },
+        })
+        .populate("locations.building", "name code")
+        .select("-password");
+      isNetworkEngineer = Boolean(admin);
+    }
 
     if (!admin) {
       return res.status(404).json({ message: "Admin not found" });
     }
 
-    const isNetworkEngineer =
-      admin.department?.name.toLowerCase() === "network engineer";
-
     const response = {
       _id: admin._id,
       name: admin.name,
       email: admin.email,
-      department: admin.department,
+      department: isNetworkEngineer ? { name: "Network Engineer" } : admin.department,
+      itDepartmentAdmin: admin.itDepartmentAdmin,
       isNetworkEngineer,
-      ...(isNetworkEngineer && {
-        locations: admin.locations.map((loc) => ({
-          building: loc.building,
-          floor: loc.floor,
-          labs: loc.labs,
-        })),
-      }),
+      locations: (admin.locations || []).map((loc) => ({
+        building: loc.building,
+        floor: loc.floor,
+        labs: loc.labs,
+      })),
     };
 
     await logAction({
@@ -362,19 +433,9 @@ export const getNetworkEngineersForDeptAdmin = async (req, res) => {
       });
     }
 
-    const networkEngineerDepartment = await Department.findOne({
-      name: /^network engineer$/i,
-    });
-
-    if (!networkEngineerDepartment) {
-      return res.status(200).json({ engineers: [] });
-    }
-
-    const engineers = await DepartmentalAdmin.find({
-      department: networkEngineerDepartment._id,
+    const engineers = await NetworkEngineer.find({
       itDepartmentAdmin: adminId,
     })
-      .populate("department", "name")
       .populate("itDepartmentAdmin", "name email")
       .populate("locations.building", "name")
       .select("-password")
@@ -390,59 +451,193 @@ export const getNetworkEngineersForDeptAdmin = async (req, res) => {
   }
 };
 
+export const changePasswordWithCurrent = async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const adminId = req.user?.id;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({
+      message: "Current password and new password are required.",
+    });
+  }
+
+  try {
+    const admin = await DepartmentalAdmin.findById(adminId);
+    const engineer = admin ? null : await NetworkEngineer.findById(adminId);
+    const account = admin || engineer;
+    const isNetworkEngineer = Boolean(engineer);
+    if (!account) {
+      return res.status(404).json({ message: "Departmental Admin not found." });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, account.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: "Current password is incorrect." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    account.password = hashedPassword;
+    account.isFirstLogin = false;
+    await account.save();
+
+    await logAction({
+      action: "PASSWORD_CHANGED",
+      performedBy: account._id,
+      description: `${isNetworkEngineer ? "Network Engineer" : "Departmental Admin"} (${account.email}) changed password.`,
+    });
+
+    return res.status(200).json({
+      message: "Password updated successfully.",
+    });
+  } catch (e) {
+    return res.status(500).json({
+      message: "Failed to change password",
+      error: e.message,
+    });
+  }
+};
+
 //Fetch the tickets for each department
 export const getDepartmentTickets = async (req, res) => {
   try {
     const { department: departmentName, role, id } = req.user;
+    const debug = req.query?.debug === "1";
     const scopedDepartment = await getTicketScopeDepartment(departmentName);
-    if (!scopedDepartment) {
+    const scopedDepartments = scopedDepartment?.all || [];
+    const scopedDepartmentIds = scopedDepartments.map((dept) => dept._id);
+    const primaryDepartment = scopedDepartment?.primary || null;
+    if (!primaryDepartment) {
       return res.status(404).json({ message: "Department not found." });
     }
 
-    let query = { to_department: scopedDepartment._id };
+    const toDepartmentFilter =
+      scopedDepartmentIds.length > 1
+        ? { $in: scopedDepartmentIds }
+        : primaryDepartment._id;
 
-    // Special logic for network engineers with locations
-    if (
-      departmentName.toLowerCase() === "network engineer" &&
-      role === "departmental-admin"
-    ) {
-      const engineer = await DepartmentalAdmin.findById(id);
-      if (
-        !engineer ||
-        !Array.isArray(engineer.locations) ||
-        engineer.locations.length === 0
-      ) {
-        return res
-          .status(400)
-          .json({ message: "Network Engineer locations not assigned." });
+    let query = { to_department: toDepartmentFilter };
+    let debugInfo = {
+      departmentName,
+      scopedDepartmentId: primaryDepartment._id,
+      scopedDepartmentIds,
+      role,
+    };
+
+    if (role === "departmental-admin") {
+      const isNetworkEngineer =
+        departmentName.toLowerCase() === "network engineer";
+      const adminRecord = isNetworkEngineer
+        ? await NetworkEngineer.findById(id)
+        : await DepartmentalAdmin.findById(id);
+
+      if (!adminRecord) {
+        return res.status(404).json({ message: "Departmental admin not found." });
       }
 
-      // Build OR conditions for all assigned locations
-      const locationFilters = engineer.locations.map((loc) => ({
-        building: loc.building,
-        floor: loc.floor,
-        lab_no: { $in: loc.labs },
-      }));
+      const isITAdmin =
+        !isNetworkEngineer && isITDepartment(adminRecord.department?.name || "");
 
-      // Find employees who match any assigned location
-      const matchingEmployees = await Employee.find({
-        $or: locationFilters,
-      }).select("_id");
+      const hasLocations =
+        Array.isArray(adminRecord.locations) &&
+        adminRecord.locations.length > 0;
 
-      const employeeIds = matchingEmployees.map((emp) => emp._id);
-      query.raised_by = { $in: employeeIds };
+      debugInfo = {
+        ...debugInfo,
+        isNetworkEngineer,
+        isITAdmin,
+        hasLocations,
+        adminLocations: adminRecord.locations || [],
+      };
+
+      if (isNetworkEngineer || isITAdmin) {
+        if (!hasLocations) {
+          return res.status(200).json(debug ? { tickets: [], debugInfo } : { tickets: [] });
+        }
+
+        // Build OR conditions for all assigned locations
+        const locationFilters = await Promise.all(
+          adminRecord.locations.map(async (loc) => {
+            let buildingId = null;
+            if (typeof loc.building === "object" && loc.building?._id) {
+              buildingId = loc.building._id;
+            } else if (typeof loc.building === "string") {
+              const trimmed = loc.building.trim();
+              if (/^[0-9a-fA-F]{24}$/.test(trimmed)) {
+                buildingId = trimmed;
+              } else if (trimmed) {
+                const buildingDoc = await Building.findOne({
+                  name: new RegExp(`^${trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+                }).select("_id");
+                buildingId = buildingDoc?._id || null;
+              }
+            } else {
+              buildingId = loc.building;
+            }
+
+            const labs = Array.isArray(loc.labs) ? loc.labs : [];
+            const normalizedLabs = labs.flatMap((lab) => {
+              const asString = String(lab);
+              const asNumber = Number(lab);
+              return Number.isNaN(asNumber) ? [asString] : [asString, asNumber];
+            });
+
+            return buildingId
+              ? {
+                  building: buildingId,
+                  floor: loc.floor,
+                  lab_no: { $in: normalizedLabs },
+                }
+              : null;
+          })
+        );
+
+        // Find employees who match any assigned location
+        const cleanedFilters = locationFilters.filter(Boolean);
+        debugInfo = {
+          ...debugInfo,
+          locationFilters,
+          cleanedFiltersCount: cleanedFilters.length,
+        };
+        if (cleanedFilters.length === 0) {
+          return res.status(200).json(debug ? { tickets: [], debugInfo } : { tickets: [] });
+        }
+        const matchingEmployees = await Employee.find({
+          $or: cleanedFilters,
+        }).select("_id");
+
+        const employeeIds = matchingEmployees.map((emp) => emp._id);
+        debugInfo = {
+          ...debugInfo,
+          matchingEmployeesCount: matchingEmployees.length,
+          employeeIds,
+        };
+
+        query = {
+          to_department: toDepartmentFilter,
+          $or: [
+            { raised_by: { $in: employeeIds } },
+            ...(isNetworkEngineer ? [{ assigned_to: id }] : []),
+          ],
+        };
+        debugInfo = { ...debugInfo, query };
+      }
     }
     const tickets = await Ticket.find(query)
-      .populate("raised_by", "name email building floor lab")
+      .populate({
+        path: "raised_by",
+        select: "name email building floor lab lab_no",
+        populate: { path: "building", select: "name" },
+      })
+      .populate("assigned_to", "name email")
       .populate("to_department", "name");
 
     await logAction({
       action: "VIEW_TICKETS",
       performedBy: req.user.id,
-      description: `Fetched tickets for department ${scopedDepartment.name} (${departmentName} view).`,
+      description: `Fetched tickets for department ${primaryDepartment.name} (${departmentName} view).`,
     });
 
-    return res.status(200).json({ tickets });
+    return res.status(200).json(debug ? { tickets, debugInfo } : { tickets });
   } catch (error) {
     console.error("Error fetching departmental tickets:", error);
     return res.status(500).json({
@@ -455,7 +650,7 @@ export const getDepartmentTickets = async (req, res) => {
 //Update Ticket status
 export const updateTicketStatus = async (req, res) => {
   const { ticketId } = req.params;
-  const { status, comment } = req.body;
+  const { status, comment, priority } = req.body;
   const { department: adminDeptName, role, id: adminId } = req.user;
   const attachmentPath = req.file ? req.file.filename : "";
 
@@ -464,26 +659,37 @@ export const updateTicketStatus = async (req, res) => {
   }
 
   try {
-    const adminRecord = await DepartmentalAdmin.findById(adminId).populate("department");
-    if (!adminRecord || !adminRecord.department) {
+    const userType = req.user?.userType;
+    const adminRecord = userType === "network-engineer"
+      ? await NetworkEngineer.findById(adminId)
+      : await DepartmentalAdmin.findById(adminId).populate("department");
+    if (!adminRecord) {
       return res.status(404).json({ message: "Departmental admin not found." });
     }
 
-    const adminDepartmentName = adminRecord.department.name;
+    const adminDepartmentName =
+      userType === "network-engineer"
+        ? "Network Engineer"
+        : adminRecord.department?.name;
     const hasNetworkAssignments =
       Array.isArray(adminRecord.locations) && adminRecord.locations.length > 0;
     const isNetworkEngineerActor =
       isNetworkEngineerDepartment(adminDepartmentName) || hasNetworkAssignments;
 
-    if (isITDepartment(adminDepartmentName) && !isNetworkEngineerActor) {
+    const isITAdmin = isITDepartment(adminDepartmentName);
+    const allowWatchOnlyUpdates = isITAdmin && !isNetworkEngineerActor;
+    if (allowWatchOnlyUpdates && status) {
       return res.status(403).json({
         message:
-          "IT departmental admins are in watch-only mode. Network engineers handle ticket updates.",
+          "IT departmental admins cannot update ticket status. Network engineers handle status updates.",
       });
     }
 
     const scopedDepartment = await getTicketScopeDepartment(adminDeptName);
-    if (!scopedDepartment) {
+    const scopedDepartments = scopedDepartment?.all || [];
+    const scopedDepartmentIds = scopedDepartments.map((dept) => dept._id);
+    const primaryDepartment = scopedDepartment?.primary || null;
+    if (!primaryDepartment) {
       return res.status(404).json({ message: "Department not found." });
     }
 
@@ -495,9 +701,12 @@ export const updateTicketStatus = async (req, res) => {
       return res.status(404).json({ message: "Ticket not found." });
     }
 
-    if (String(ticket.to_department?._id) !== String(scopedDepartment._id)) {
+    const inScope = scopedDepartmentIds.some(
+      (deptId) => String(deptId) === String(ticket.to_department?._id)
+    );
+    if (!inScope) {
       return res.status(403).json({
-        message: `This ticket does not belong to your allowed department scope (${scopedDepartment.name}).`,
+        message: `This ticket does not belong to your allowed department scope (${primaryDepartment.name}).`,
       });
     }
 
@@ -522,6 +731,7 @@ export const updateTicketStatus = async (req, res) => {
     }
 
     const currentStatus = ticket.status;
+    const allowedPriorities = ["low", "normal", "high", "urgent"];
 
     if (currentStatus === "revoked") {
       return res.status(400).json({
@@ -535,6 +745,7 @@ export const updateTicketStatus = async (req, res) => {
     };
 
     let statusChanged = false;
+    let priorityChanged = false;
 
     if (status) {
       if (
@@ -567,10 +778,20 @@ export const updateTicketStatus = async (req, res) => {
       statusChanged = true;
     }
 
+    if (priority) {
+      if (!allowedPriorities.includes(priority)) {
+        return res.status(400).json({ message: "Invalid priority value." });
+      }
+      if (ticket.priority !== priority) {
+        ticket.priority = priority;
+        priorityChanged = true;
+      }
+    }
+
     let newComment = null;
 
     if (comment?.trim() || attachmentPath) {
-      if (ticket.assigned_to?.toString() !== adminId) {
+      if (!allowWatchOnlyUpdates && ticket.assigned_to?.toString() !== adminId) {
         return res.status(403).json({
           message: "Only the assigned admin can comment on this ticket.",
         });
@@ -595,6 +816,17 @@ export const updateTicketStatus = async (req, res) => {
           action: "TICKET_STATUS_UPDATE",
           performedBy: adminId,
           description: `Updated status of ticket '${ticket.title}' to '${status}'.`,
+          ticketId: ticket._id,
+        })
+      );
+    }
+
+    if (priorityChanged) {
+      logs.push(
+        logAction({
+          action: "TICKET_PRIORITY_UPDATE",
+          performedBy: adminId,
+          description: `Updated priority of ticket '${ticket.title}' to '${priority}'.`,
           ticketId: ticket._id,
         })
       );
@@ -666,6 +898,128 @@ export const updateTicketStatus = async (req, res) => {
     return res.status(500).json({
       message: "Failed to update ticket status",
       error: e.message,
+    });
+  }
+};
+
+export const assignTicketToEngineer = async (req, res) => {
+  const { ticketId } = req.params;
+  const { engineerId } = req.body;
+  const { department: adminDeptName, role, id: adminId } = req.user;
+
+  if (role !== "departmental-admin") {
+    return res.status(403).json({ message: "Unauthorized access." });
+  }
+
+  if (!engineerId) {
+    return res.status(400).json({ message: "Engineer ID is required." });
+  }
+
+  try {
+    const adminRecord = await DepartmentalAdmin.findById(adminId).populate(
+      "department",
+      "name"
+    );
+    if (!adminRecord || !adminRecord.department) {
+      return res.status(404).json({ message: "Departmental admin not found." });
+    }
+
+    if (!isITDepartment(adminRecord.department.name)) {
+      return res.status(403).json({
+        message: "Only IT departmental admins can assign network engineers.",
+      });
+    }
+
+    const scopedDepartment = await getTicketScopeDepartment(adminDeptName);
+    const scopedDepartments = scopedDepartment?.all || [];
+    const scopedDepartmentIds = scopedDepartments.map((dept) => dept._id);
+    const primaryDepartment = scopedDepartment?.primary || null;
+    if (!primaryDepartment) {
+      return res.status(404).json({ message: "Department not found." });
+    }
+
+    const engineer = await NetworkEngineer.findOne({
+      _id: engineerId,
+      itDepartmentAdmin: adminId,
+    });
+
+    if (!engineer) {
+      return res.status(404).json({
+        message: "Selected network engineer is not available for this admin.",
+      });
+    }
+
+    const ticket = await Ticket.findById(ticketId)
+      .populate({
+        path: "raised_by",
+        select: "name email building floor lab_no",
+        populate: { path: "building", select: "name" },
+      })
+      .populate("to_department", "name")
+      .populate("assigned_to", "name email");
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found." });
+    }
+
+    const inScope = scopedDepartmentIds.some(
+      (deptId) => String(deptId) === String(ticket.to_department?._id)
+    );
+    if (!inScope) {
+      return res.status(403).json({
+        message: `This ticket does not belong to your allowed department scope (${primaryDepartment.name}).`,
+      });
+    }
+
+    if (ticket.status === "resolved" || ticket.status === "revoked") {
+      return res.status(400).json({
+        message: "Cannot assign a resolved or revoked ticket.",
+      });
+    }
+
+    ticket.assigned_to = engineer._id;
+    ticket.assigned_manually = true;
+    ticket.assigned_at = new Date();
+    if (ticket.status !== "in_progress") {
+      ticket.status = "in_progress";
+    }
+    await ticket.save();
+
+    await logAction({
+      action: "TICKET_ASSIGNED_MANUALLY",
+      performedBy: adminId,
+      description: `Assigned ticket '${ticket.title}' to ${engineer.name} and set status to in_progress.`,
+      ticketId: ticket._id,
+    });
+
+    const io = req.app.get("io");
+    if (io && ticket.raised_by?.building && ticket.raised_by?.floor !== undefined) {
+      const networkRoom = `network-${ticket.raised_by.building._id}-${ticket.raised_by.floor}`;
+      io.to(networkRoom).emit("ticket-assigned", {
+        ticketId: ticket._id,
+        title: ticket.title,
+        assignedTo: engineer._id,
+      });
+    }
+
+    const updatedTicket = await Ticket.findById(ticketId)
+      .populate({
+        path: "raised_by",
+        select: "name email building floor lab_no",
+        populate: { path: "building", select: "name" },
+      })
+      .populate("assigned_to", "name email")
+      .populate("to_department", "name");
+
+    return res.status(200).json({
+      message: "Ticket assigned successfully.",
+      ticket: updatedTicket,
+    });
+  } catch (error) {
+    console.error("Error assigning ticket:", error);
+    return res.status(500).json({
+      message: "Failed to assign ticket.",
+      error: error.message,
     });
   }
 };
@@ -952,16 +1306,20 @@ export const bulkUpdateInventoryLocation = async (req, res) => {
     }
 
     // 2. Get admin and check role
-    const admin = await DepartmentalAdmin.findById(adminId)
-      .populate("department")
-      .populate("locations.building");
+    const userType = req.user?.userType;
+    const admin = userType === "network-engineer"
+      ? await NetworkEngineer.findById(adminId).populate("locations.building")
+      : await DepartmentalAdmin.findById(adminId)
+          .populate("department")
+          .populate("locations.building");
 
     if (!admin) {
       return res.status(404).json({ message: "Departmental Admin not found." });
     }
 
     const isNetworkEngineer =
-      admin.department.name.toLowerCase().trim() === "network engineer";
+      userType === "network-engineer" ||
+      admin.department?.name?.toLowerCase().trim() === "network engineer";
 
     // 3. Network Engineer Access Control
     if (isNetworkEngineer) {

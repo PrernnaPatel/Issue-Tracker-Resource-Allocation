@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useState, useEffect, useRef } from "react"
-import { getUnreadTicketUpdates } from "../service/deptAuthService"
+import { getUnreadTicketUpdates, markAllTicketUpdatesAsViewed } from "../service/deptAuthService"
 import notificationSound from "../utils/notificationSound"
 
 const NotificationContext = createContext()
@@ -142,13 +142,21 @@ export const NotificationProvider = ({ children }) => {
     })
   }
 
-  const markAllAsRead = () => {
-    setNotifications((prev) => {
-      const updated = prev.map((notif) => ({ ...notif, read: true }))
-      return updated
-    })
-
+  const markAllAsRead = async () => {
+    setNotifications((prev) => prev.map((notif) => ({ ...notif, read: true })))
     setUnreadCount(0)
+    setUnreadTickets([])
+    setTotalUnreadTickets(0)
+    previousUnreadIds.current = new Set()
+
+    const result = await markAllTicketUpdatesAsViewed()
+    if (!result.success) {
+      console.error("❌ [NotificationProvider] Failed to mark all as read:", result.message)
+      await fetchUnreadUpdates(false)
+      return
+    }
+
+    await fetchUnreadUpdates(false)
   }
 
   const clearNotification = (notificationId) => {

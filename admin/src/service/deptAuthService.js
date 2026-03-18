@@ -128,6 +128,36 @@ export const changeDeptAdminPassword = async (email, newPassword) => {
   };
 };
 
+export const changeDeptAdminPasswordWithCurrent = async (currentPassword, newPassword) => {
+  const token = getDeptAdminToken();
+  if (!token) {
+    return {
+      success: false,
+      message: 'Authentication token not found'
+    };
+  }
+
+  const response = await fetch(`${API_URL}/change-password-current`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ currentPassword, newPassword })
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    return {
+      success: false,
+      message: data.message || 'Failed to change password'
+    };
+  }
+  return {
+    success: true,
+    message: data.message || 'Password changed successfully'
+  };
+};
+
 export const getDepartmentTickets = async () => {
   const token = getDeptAdminToken();
   if (!token) {
@@ -191,7 +221,11 @@ export const getDepartmentAttachment = async (filename) => {
   };
 };
 
-export const updateTicketStatus = async (ticketId, { status, comment }, attachmentFile) => {
+export const updateTicketStatus = async (
+  ticketId,
+  { status, comment, priority },
+  attachmentFile
+) => {
   const token = getDeptAdminToken();
   if (!token) {
     return {
@@ -204,6 +238,7 @@ export const updateTicketStatus = async (ticketId, { status, comment }, attachme
     const formData = new FormData();
     if (status) formData.append('status', status);
     if (comment) formData.append('comment', comment);
+    if (priority) formData.append('priority', priority);
     formData.append('attachment', attachmentFile);
     response = await fetch(`${API_URL}/update-ticket/${ticketId}`, {
       method: 'PUT',
@@ -219,7 +254,7 @@ export const updateTicketStatus = async (ticketId, { status, comment }, attachme
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ status, comment })
+      body: JSON.stringify({ status, comment, priority })
     });
   }
   data = await response.json();
@@ -233,6 +268,39 @@ export const updateTicketStatus = async (ticketId, { status, comment }, attachme
     success: true,
     ticket: data.ticket,
     message: data.message || 'Ticket updated successfully'
+  };
+};
+
+export const assignTicketToEngineer = async (ticketId, engineerId) => {
+  const token = getDeptAdminToken();
+  if (!token) {
+    return {
+      success: false,
+      message: "Authentication token not found",
+    };
+  }
+
+  const response = await fetch(`${API_URL}/assign-ticket/${ticketId}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ engineerId }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    return {
+      success: false,
+      message: data.message || "Failed to assign ticket",
+    };
+  }
+
+  return {
+    success: true,
+    ticket: data.ticket,
+    message: data.message || "Ticket assigned successfully",
   };
 };
 
@@ -466,6 +534,39 @@ export const getUnreadTicketUpdates = async () => {
     message: "Unread updates fetched successfully",
   }
 };
+
+export const markAllTicketUpdatesAsViewed = async () => {
+  const token = getDeptAdminToken()
+  if (!token) {
+    return {
+      success: false,
+      message: "Authentication token not found",
+    }
+  }
+
+  const response = await fetch(`${API_URL}/mark-all-viewed`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  const data = await response.json()
+
+  if (!response.ok) {
+    return {
+      success: false,
+      message: data.message || "Failed to mark all tickets as viewed",
+    }
+  }
+
+  return {
+    success: true,
+    message: data.message || "All tickets marked as viewed",
+    updatedCount: data.updatedCount || 0,
+  }
+}
 
 export const getAllInventorySystems = async () => {
   const response = await fetch(`${API_URL}/get-inventory`, {

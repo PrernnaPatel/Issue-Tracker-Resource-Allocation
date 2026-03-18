@@ -2,6 +2,7 @@ import Department from "../models/Department.model.js";
 import Ticket from "../models/Ticket.model.js";
 import Employee from "../models/Employee.js";
 import DepartmentalAdmin from "../models/DepartmentalAdmin.model.js";
+import NetworkEngineer from "../models/NetworkEngineer.model.js";
 import { logAction } from "../utils/logAction.js";
 
 //Add Department by Admin
@@ -68,28 +69,21 @@ export const sendDepartment = async (req, res) => {
       departmentAdminCounts.map((item) => [String(item._id), item.count])
     );
 
-    const networkEngineerDept = allDepts.find(
-      (dept) => dept.name?.toLowerCase() === "network engineer"
-    );
-
     let networkEngineerCountForIT = 0;
-    if (networkEngineerDept) {
-      const itDepartments = depts.filter((dept) =>
-        /^it(\s+department)?$/i.test(dept.name || "")
-      );
-      const itDepartmentIds = itDepartments.map((dept) => dept._id);
+    const itDepartments = depts.filter((dept) =>
+      /^it(\s+department)?$/i.test(dept.name || "")
+    );
+    const itDepartmentIds = itDepartments.map((dept) => dept._id);
 
-      const itAdmins = await DepartmentalAdmin.find({
-        department: { $in: itDepartmentIds },
-      }).select("_id");
-      const itAdminIds = itAdmins.map((admin) => admin._id);
+    const itAdmins = await DepartmentalAdmin.find({
+      department: { $in: itDepartmentIds },
+    }).select("_id");
+    const itAdminIds = itAdmins.map((admin) => admin._id);
 
-      if (itAdminIds.length > 0) {
-        networkEngineerCountForIT = await DepartmentalAdmin.countDocuments({
-          department: networkEngineerDept._id,
-          itDepartmentAdmin: { $in: itAdminIds },
-        });
-      }
+    if (itAdminIds.length > 0) {
+      networkEngineerCountForIT = await NetworkEngineer.countDocuments({
+        itDepartmentAdmin: { $in: itAdminIds },
+      });
     }
 
     const enrichedDepartments = depts.map((dept) => {

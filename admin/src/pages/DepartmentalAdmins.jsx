@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Search, Plus, X, Pencil, Trash2, Eye } from 'lucide-react';
-import { createDepartmentalAdmin, deleteDepartmentalAdmin, getAllDepartments, getAllDepartmentalAdmins, getAvailableNetworkEngineerFloors, getDepartmentLocations, updateDepartmentalAdmin, updateNetworkEngineerLocations } from '../service/adminAuthService';
+import { createDepartmentalAdmin, deleteDepartmentalAdmin, getAllDepartments, getAllDepartmentalAdmins, getAllBuildings, getAvailableNetworkEngineerFloors, updateDepartmentalAdmin, updateNetworkEngineerLocations } from '../service/adminAuthService';
 import { toast } from 'react-toastify';
 import { useSearchParams } from 'react-router-dom';
 
@@ -30,6 +30,11 @@ const DepartmentalAdmins = ({ networkOnly = false }) => {
   const [editSelectedBuilding, setEditSelectedBuilding] = useState('');
   const [editSelectedFloor, setEditSelectedFloor] = useState('');
   const [editSelectedLabs, setEditSelectedLabs] = useState([]);
+  const [editDeptAssignments, setEditDeptAssignments] = useState([]);
+  const [editDeptAvailableAssignments, setEditDeptAvailableAssignments] = useState([]);
+  const [editDeptSelectedBuilding, setEditDeptSelectedBuilding] = useState('');
+  const [editDeptSelectedFloor, setEditDeptSelectedFloor] = useState('');
+  const [editDeptSelectedLabs, setEditDeptSelectedLabs] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [showAdminEditModal, setShowAdminEditModal] = useState(false);
@@ -58,6 +63,46 @@ const DepartmentalAdmins = ({ networkOnly = false }) => {
       dept.name?.toLowerCase().includes('network engineer')
     );
     return match?.name || 'Network Engineer';
+  };
+
+  const buildAssignmentsFromBuildings = (buildings = []) => {
+    return (buildings || []).map((building) => ({
+      buildingId: String(building._id),
+      buildingName: building.name,
+      availableFloors: (building.floors || []).map((floorObj) => ({
+        floor: floorObj.floor,
+        availableLabs: floorObj.labs || [],
+      })),
+    }));
+  };
+
+  const formatLocations = (locations = []) => {
+    if (!Array.isArray(locations) || locations.length === 0) {
+      return null;
+    }
+    const grouped = new Map();
+    locations.forEach((loc) => {
+      const buildingName =
+        typeof loc.building === 'object' ? loc.building.name : String(loc.building || '');
+      if (!grouped.has(buildingName)) {
+        grouped.set(buildingName, { floors: new Set(), labs: new Set() });
+      }
+      const entry = grouped.get(buildingName);
+      if (loc.floor !== undefined && loc.floor !== null) {
+        entry.floors.add(loc.floor);
+      }
+      (loc.labs || []).forEach((lab) => entry.labs.add(lab));
+    });
+
+    return Array.from(grouped.entries()).map(([buildingName, data]) => {
+      const floors = Array.from(data.floors).sort((a, b) => Number(a) - Number(b));
+      const labs = Array.from(data.labs);
+      return {
+        buildingName,
+        floors,
+        labs,
+      };
+    });
   };
 
   const fetchData = async () => {
@@ -124,30 +169,19 @@ const DepartmentalAdmins = ({ networkOnly = false }) => {
         setAvailableAssignments([]);
       }
     } else {
-      setAvailableAssignments([]);
-      setSelectedBuilding('');
-      setSelectedFloor('');
-      setSelectedLabs([]);
-      setBuildingAssignments([]);
-      return;
-    }
-
-    try {
-      const selectedDepartment = departments.find((dept) => dept.name === value);
-      if (!selectedDepartment?._id) {
+      try {
+        const buildings = await getAllBuildings();
+        const assignments = buildAssignmentsFromBuildings(buildings);
+        setAvailableAssignments(assignments);
+      } catch {
+        toast.error('Failed to fetch buildings');
         setAvailableAssignments([]);
-        return;
+      } finally {
+        setSelectedBuilding('');
+        setSelectedFloor('');
+        setSelectedLabs([]);
+        setBuildingAssignments([]);
       }
-
-      const assignments = await getDepartmentLocations(selectedDepartment._id);
-      setAvailableAssignments(assignments);
-      setSelectedBuilding('');
-      setSelectedFloor('');
-      setSelectedLabs([]);
-      setBuildingAssignments([]);
-    } catch {
-      toast.error('Failed to fetch department locations');
-      setAvailableAssignments([]);
     }
   };
 
@@ -262,6 +296,27 @@ const DepartmentalAdmins = ({ networkOnly = false }) => {
       email: admin.email || '',
       department: admin.department?.name || ''
     });
+    const mappedAssignments = (admin.locations || []).map((loc) => ({
+      buildingId:
+        typeof loc.building === 'object' ? String(loc.building._id || '') : String(loc.building),
+      buildingName:
+        typeof loc.building === 'object' ? loc.building.name : String(loc.building || ''),
+      floor: String(loc.floor ?? ''),
+      labs: Array.isArray(loc.labs) ? [...loc.labs] : [],
+    }));
+    setEditDeptAssignments(mappedAssignments);
+    setEditDeptSelectedBuilding('');
+    setEditDeptSelectedFloor('');
+    setEditDeptSelectedLabs([]);
+    getAllBuildings()
+      .then((buildings) => {
+        const assignments = buildAssignmentsFromBuildings(buildings);
+        setEditDeptAvailableAssignments(assignments);
+      })
+      .catch(() => {
+        toast.error('Failed to fetch buildings');
+        setEditDeptAvailableAssignments([]);
+      });
     setShowAdminEditModal(true);
   };
 
@@ -272,10 +327,20 @@ const DepartmentalAdmins = ({ networkOnly = false }) => {
       await updateDepartmentalAdmin(editFormData.id, {
         name: editFormData.name,
         email: editFormData.email,
-        department: editFormData.department
+        department: editFormData.department,
+        locations: editDeptAssignments.map((assignment) => ({
+          building: assignment.buildingId,
+          floor: Number(assignment.floor),
+          labs: assignment.labs,
+        })),
       });
       toast.success('Departmental admin updated successfully');
       setShowAdminEditModal(false);
+      setEditDeptAssignments([]);
+      setEditDeptAvailableAssignments([]);
+      setEditDeptSelectedBuilding('');
+      setEditDeptSelectedFloor('');
+      setEditDeptSelectedLabs([]);
       fetchData();
     } catch (error) {
       toast.error(error.message || 'Failed to update departmental admin');
@@ -733,12 +798,35 @@ const DepartmentalAdmins = ({ networkOnly = false }) => {
                   <span className="font-semibold">Status:</span>{' '}
                   {viewAdminModal.admin.isFirstLogin ? 'First Login Pending' : 'Active'}
                 </p>
-                <p>
-                  <span className="font-semibold">Location:</span>{' '}
-                  {viewAdminModal.admin.locations && viewAdminModal.admin.locations.length > 0
-                    ? `${viewAdminModal.admin.locations.length} assigned`
-                    : 'No location assigned'}
-                </p>
+                <div>
+                  <span className="font-semibold">Location:</span>
+                  {(() => {
+                    const locations = formatLocations(viewAdminModal.admin.locations);
+                    if (!locations || locations.length === 0) {
+                      return <span className="ml-1">No location assigned</span>;
+                    }
+                    return (
+                      <div className="mt-2 space-y-2">
+                        {locations.map((loc) => (
+                          <div
+                            key={loc.buildingName}
+                            className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
+                          >
+                            <div className="text-sm font-medium text-gray-900">
+                              {loc.buildingName}
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              Floors: {loc.floors.join(', ') || 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              Labs: {loc.labs.join(', ') || 'N/A'}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             </div>
           </div>
@@ -787,6 +875,170 @@ const DepartmentalAdmins = ({ networkOnly = false }) => {
                         </option>
                       ))}
                     </select>
+                  </div>
+                )}
+
+                {!networkOnly && (
+                  <div className="border-t pt-4">
+                    <h3 className="text-lg font-medium text-gray-900 mb-3">Locations</h3>
+
+                    {editDeptAssignments.length > 0 && (
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Current Assignments:
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {editDeptAssignments.map((assignment, index) => (
+                            <div
+                              key={index}
+                              className="flex items-center gap-2 bg-blue-50 border border-blue-200 px-3 py-2 rounded-lg hover:bg-blue-100 transition-colors"
+                              title={`Labs: ${assignment.labs.join(', ')}`}
+                            >
+                              <div className="flex-1">
+                                <div className="text-sm font-medium text-blue-800">
+                                  {assignment.buildingName} - F{assignment.floor}
+                                </div>
+                                <div className="text-xs text-blue-600">
+                                  {assignment.labs.length} lab{assignment.labs.length !== 1 ? 's' : ''}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditDeptAssignments((prev) => prev.filter((_, i) => i !== index))
+                                }
+                                className="text-red-500 hover:text-red-700 p-1 rounded-full hover:bg-red-50"
+                                title="Remove assignment"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="border rounded-lg p-4 bg-gray-50">
+                      <h4 className="text-sm font-medium text-gray-700 mb-3">Add New Assignment</h4>
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Building</label>
+                          <select
+                            value={editDeptSelectedBuilding}
+                            onChange={(e) => {
+                              setEditDeptSelectedBuilding(e.target.value);
+                              setEditDeptSelectedFloor('');
+                              setEditDeptSelectedLabs([]);
+                            }}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4B2D87] focus:border-transparent"
+                          >
+                            <option value="">Select Building</option>
+                            {editDeptAvailableAssignments.map((b) => (
+                              <option key={b.buildingId} value={b.buildingId}>{b.buildingName}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Floor</label>
+                          <select
+                            value={editDeptSelectedFloor}
+                            onChange={(e) => {
+                              setEditDeptSelectedFloor(e.target.value);
+                              setEditDeptSelectedLabs([]);
+                            }}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4B2D87] focus:border-transparent"
+                            disabled={!editDeptSelectedBuilding}
+                          >
+                            <option value="">Select Floor</option>
+                            {editDeptAvailableAssignments
+                              .find((b) => b.buildingId === editDeptSelectedBuilding)
+                              ?.availableFloors.map((floor) => (
+                                <option key={floor.floor} value={floor.floor}>{floor.floor}</option>
+                              ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {editDeptSelectedBuilding && editDeptSelectedFloor && (
+                        <div className="mb-3">
+                          <label className="block text-xs font-medium text-gray-600 mb-2">Select Labs:</label>
+                          <div className="grid grid-cols-3 gap-2 max-h-32 overflow-y-auto">
+                            {(editDeptAvailableAssignments
+                              .find((b) => b.buildingId === editDeptSelectedBuilding)
+                              ?.availableFloors.find(
+                                (f) => String(f.floor) === String(editDeptSelectedFloor)
+                              )?.availableLabs || []).map((lab) => (
+                                <label key={lab} className="flex items-center space-x-2 text-xs">
+                                  <input
+                                    type="checkbox"
+                                    checked={editDeptSelectedLabs.includes(lab)}
+                                    onChange={() =>
+                                      setEditDeptSelectedLabs((prev) =>
+                                        prev.includes(lab) ? prev.filter((l) => l !== lab) : [...prev, lab]
+                                      )
+                                    }
+                                    className="rounded border-gray-300 text-[#4B2D87] focus:ring-[#4B2D87]"
+                                  />
+                                  <span>{lab}</span>
+                                </label>
+                              ))}
+                          </div>
+                          {editDeptSelectedLabs.length > 0 && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              Selected: {editDeptSelectedLabs.join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!editDeptSelectedBuilding || !editDeptSelectedFloor) {
+                            toast.error('Please select both building and floor');
+                            return;
+                          }
+                          if (editDeptSelectedLabs.length === 0) {
+                            toast.error('Please select at least one lab');
+                            return;
+                          }
+                          const buildingObj = editDeptAvailableAssignments.find(
+                            (b) => b.buildingId === editDeptSelectedBuilding
+                          );
+                          if (!buildingObj) {
+                            toast.error('Invalid building selection');
+                            return;
+                          }
+                          const exists = editDeptAssignments.some(
+                            (assignment) =>
+                              assignment.buildingId === editDeptSelectedBuilding &&
+                              String(assignment.floor) === String(editDeptSelectedFloor)
+                          );
+                          if (exists) {
+                            toast.error('This building-floor combination is already added');
+                            return;
+                          }
+                          const newAssignment = {
+                            buildingId: editDeptSelectedBuilding,
+                            buildingName: buildingObj.buildingName,
+                            floor: String(editDeptSelectedFloor),
+                            labs: [...editDeptSelectedLabs],
+                          };
+                          setEditDeptAssignments((prev) => [...prev, newAssignment]);
+                          setEditDeptSelectedBuilding('');
+                          setEditDeptSelectedFloor('');
+                          setEditDeptSelectedLabs([]);
+                        }}
+                        className="w-full px-3 py-2 text-sm bg-[#4B2D87] text-white rounded-lg hover:bg-[#5E3A9F] transition-colors"
+                        disabled={
+                          !editDeptSelectedBuilding ||
+                          !editDeptSelectedFloor ||
+                          editDeptSelectedLabs.length === 0
+                        }
+                      >
+                        Add Assignment
+                      </button>
+                    </div>
                   </div>
                 )}
 

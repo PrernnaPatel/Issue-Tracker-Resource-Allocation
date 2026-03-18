@@ -11,6 +11,8 @@ import {
   getDepartmentLocations,
   deleteBuilding,
   updateNetworkEngineerLocations,
+  getAllNetworkEngineers,
+  deleteNetworkEngineer,
   addComponentSet,
   getAllComponentSets,
   deleteComponentSet,
@@ -58,12 +60,14 @@ router.delete("/delete-departmental-admin/:id", adminAuthMiddleware, deleteDepar
 router.get("/available-network-engineer-floors", adminAuthMiddleware, getAvailableNetworkEngineerFloors);
 router.get("/department-locations/:departmentId", adminAuthMiddleware, getDepartmentLocations);
 router.get("/get-departmental-admins", adminAuthMiddleware, getAllDepartmentalAdmin);
+router.get("/get-network-engineers", adminAuthMiddleware, getAllNetworkEngineers);
 router.get("/get-attachment/:filename", adminAuthMiddleware, getAttachment);
 router.put(
   "/update-network-locations/:id",
   adminAuthMiddleware, 
   updateNetworkEngineerLocations
 );
+router.delete("/delete-network-engineer/:id", adminAuthMiddleware, deleteNetworkEngineer);
 router.post("/add-componentset", adminAuthMiddleware, addComponentSet);
 router.get("/get-componentset", adminAuthMiddleware, getAllComponentSets);
 router.delete("/delete-componentset/:id", adminAuthMiddleware, deleteComponentSet);

@@ -85,6 +85,14 @@ const DepartmentAdminSidebar = ({ isOpen, onClose }) => {
       : 'Dept Admin';
   };
 
+  const isNetworkEngineerDept = () => {
+    if (!deptAdmin?.department) return false;
+    const departmentName = typeof deptAdmin.department === 'object'
+      ? deptAdmin.department.name
+      : deptAdmin.department;
+    return departmentName?.toLowerCase().includes('network engineer');
+  };
+
   // Calculate assigned unread tickets for this admin
   const assignedUnreadCount = unreadTickets && deptAdmin && deptAdmin._id
     ? unreadTickets.filter(
@@ -119,12 +127,24 @@ const DepartmentAdminSidebar = ({ isOpen, onClose }) => {
       label: (
         <div className="flex flex-col">
           <span>{deptAdmin?.name || 'John Doe'}</span>
-          <span className="text-sm text-gray-500">{deptAdmin?.department || 'IT Department'}</span>
+          <span className="text-sm text-gray-500">
+            {typeof deptAdmin?.department === 'object'
+              ? deptAdmin?.department?.name
+              : deptAdmin?.department || 'IT Department'}
+          </span>
         </div>
       ),
       icon: Shield,
+      hasSubmenu: true,
+      submenu: [
+        { id: 'profile-view', label: 'Profile', icon: Users, path: '/dept/profile' },
+        { id: 'change-password', label: 'Change Password', icon: Settings, path: '/dept/change-password' }
+      ]
     },
-  ];
+  ].filter((item) => {
+    if (!isNetworkEngineerDept()) return true;
+    return !['tickets', 'ticket-assigned', 'reports'].includes(item.id);
+  });
 
   return (
     <>
@@ -173,7 +193,11 @@ const DepartmentAdminSidebar = ({ isOpen, onClose }) => {
                         <div className="flex flex-col">
                           <span className="font-medium">{deptAdmin?.name || 'John Doe'}</span>
                           {deptAdmin?.department && (
-                            <span className="text-sm text-gray-500">{deptAdmin.department}</span>
+                            <span className="text-sm text-gray-500">
+                              {typeof deptAdmin.department === 'object'
+                                ? deptAdmin.department?.name
+                                : deptAdmin.department}
+                            </span>
                           )}
                         </div>
                       </div>
