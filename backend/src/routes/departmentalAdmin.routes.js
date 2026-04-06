@@ -21,6 +21,12 @@ import {
   getUnreadTicketUpdates,
   markAllTicketsAsViewed,
 } from "../controller/ticket.controller.js";
+import {
+  getDeptTicketOptions,
+  createDeptTicketOption,
+  updateDeptTicketOption,
+  deleteDeptTicketOption,
+} from "../controller/ticketOption.controller.js";
 import { getAllComponentSets } from "../controller/admin.controller.js";
 import { sendBuilding } from "../controller/employee.controller.js";
 import {
@@ -75,6 +81,10 @@ router.patch(
 );
 router.post("/mark-all-viewed", deptAdminAuthMiddleware, markAllTicketsAsViewed);
 router.get("/unread-updates", deptAdminAuthMiddleware, getUnreadTicketUpdates);
+router.get("/ticket-options", deptAdminAuthMiddleware, getDeptTicketOptions);
+router.post("/ticket-options", deptAdminAuthMiddleware, createDeptTicketOption);
+router.put("/ticket-options/:id", deptAdminAuthMiddleware, updateDeptTicketOption);
+router.delete("/ticket-options/:id", deptAdminAuthMiddleware, deleteDeptTicketOption);
 router.get("/get-componentset", deptAdminAuthMiddleware, getAllComponentSets);
 router.get("/all-buildings", deptAdminAuthMiddleware, sendBuilding);
 router.post("/add-inventory", deptAdminAuthMiddleware, addInventorySystem);

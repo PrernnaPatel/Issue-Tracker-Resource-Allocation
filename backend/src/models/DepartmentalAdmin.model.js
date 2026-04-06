@@ -23,6 +23,9 @@ const departmentalAdminSchema = mongoose.Schema(
     password: {
       type: String,
     },
+    securityPin: {
+      type: String,
+    },
     isFirstLogin: {
       type: Boolean,
       required: true,

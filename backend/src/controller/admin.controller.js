@@ -12,6 +12,12 @@ import ComponentSet from "../models/ComponentSet.model.js";
 import crypto from "crypto";
 import ActionLog from "../models/ActionLog.model.js";
 import InventorySystem from "../models/InventorySystem.model.js";
+import {
+  compareSecurityPin,
+  generateTemporarySecurityPin,
+  hashSecurityPin,
+  isValidSecurityPin,
+} from "../utils/securityPin.js";
 
 const normalizeName = (value = "") =>
   value.trim().replace(/\s+/g, " ").toLowerCase();
@@ -19,9 +25,13 @@ const normalizeName = (value = "") =>
 const isNetworkEngineerDepartment = (name = "") =>
   /^network engineer$/i.test(name.trim());
 
+const DEFAULT_SUPER_ADMIN_EMAIL = "admin@gmail.com";
+const DEFAULT_SUPER_ADMIN_PASSWORD = "abc123";
+const DEFAULT_SUPER_ADMIN_PIN = "123456";
+
 //Admin Login
 export const adminLogin = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, securityPin } = req.body;
   //console.log(req.body);
   try {
     //Find Admin
@@ -30,9 +40,77 @@ export const adminLogin = async (req, res) => {
       return res.status(401).json({ message: "Admin not found" });
     }
 
-    //Match Password
-    const isPasswordValid = await bcrypt.compare(password, admin.password);
+    if (!isValidSecurityPin(securityPin)) {
+      return res.status(400).json({ message: "Security pin must be 6 digits." });
+    }
+
+    const isDefaultSuperAdmin =
+      admin.email === DEFAULT_SUPER_ADMIN_EMAIL &&
+      password === DEFAULT_SUPER_ADMIN_PASSWORD &&
+      securityPin === DEFAULT_SUPER_ADMIN_PIN;
+
+    const isPlainPasswordValue = (value = "") =>
+      typeof value === "string" && !value.startsWith("$2");
+    const isPlainPinValue = (value = "") =>
+      typeof value === "string" && !value.startsWith("$2");
+
+    const hasLegacyPlainPassword = isPlainPasswordValue(admin.password);
+    const hasLegacyPlainPin = isPlainPinValue(admin.securityPin);
+
+    const defaultPasswordMatches = admin.password
+      ? hasLegacyPlainPassword
+        ? admin.password === DEFAULT_SUPER_ADMIN_PASSWORD
+        : await bcrypt.compare(DEFAULT_SUPER_ADMIN_PASSWORD, admin.password)
+      : false;
+
+    const defaultPinMatches = admin.securityPin
+      ? hasLegacyPlainPin
+        ? admin.securityPin === DEFAULT_SUPER_ADMIN_PIN
+        : await compareSecurityPin(DEFAULT_SUPER_ADMIN_PIN, admin.securityPin)
+      : false;
+
+    if (
+      isDefaultSuperAdmin &&
+      (!defaultPasswordMatches || !defaultPinMatches)
+    ) {
+      admin.password = DEFAULT_SUPER_ADMIN_PASSWORD;
+      admin.securityPin = DEFAULT_SUPER_ADMIN_PIN;
+      await admin.save();
+    }
+
+    const isPasswordValid = isPlainPasswordValue(admin.password)
+      ? admin.password === password
+      : await bcrypt.compare(password, admin.password);
+
     if (!isPasswordValid) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    if (!admin.securityPin) {
+      if (admin.email === DEFAULT_SUPER_ADMIN_EMAIL) {
+        admin.securityPin = DEFAULT_SUPER_ADMIN_PIN;
+        await admin.save();
+      } else {
+        return res
+          .status(400)
+          .json({ message: "Security pin is not configured for this account." });
+      }
+    }
+
+    const isSecurityPinValid =
+      isPlainPinValue(admin.securityPin)
+        ? admin.securityPin === securityPin
+        : await compareSecurityPin(securityPin, admin.securityPin);
+
+    if (
+      isSecurityPinValid &&
+      isPlainPinValue(admin.securityPin)
+    ) {
+      admin.securityPin = securityPin;
+      await admin.save();
+    }
+
+    if (!isSecurityPinValid) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
@@ -216,9 +294,14 @@ export const createDepartmentalAdmin = async (req, res) => {
       }
     }
 
-    const existingAdmin = await DepartmentalAdmin.findOne({ email });
-    const existingEngineer = await NetworkEngineer.findOne({ email });
-    if (existingAdmin || existingEngineer) {
+    const [existingAdmin, existingEngineer, existingEmployee, existingSuperAdmin] =
+      await Promise.all([
+        DepartmentalAdmin.findOne({ email }),
+        NetworkEngineer.findOne({ email }),
+        Employee.findOne({ email }),
+        Admin.findOne({ email }),
+      ]);
+    if (existingAdmin || existingEngineer || existingEmployee || existingSuperAdmin) {
       return res.status(400).json({
         message: "This user already exists.",
       });
@@ -336,13 +419,16 @@ export const createDepartmentalAdmin = async (req, res) => {
     }
 
     const tempPassword = crypto.randomBytes(4).toString("hex");
+    const tempSecurityPin = generateTemporarySecurityPin();
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    const hashedSecurityPin = await hashSecurityPin(tempSecurityPin);
 
     if (isNetworkEngineerRequest) {
       const engineer = new NetworkEngineer({
         name,
         email,
         password: hashedPassword,
+        securityPin: hashedSecurityPin,
         isFirstLogin: true,
         itDepartmentAdmin: linkedITAdminId,
         ...(validatedLocations.length > 0 && {
@@ -356,6 +442,7 @@ export const createDepartmentalAdmin = async (req, res) => {
         name,
         email,
         tempPassword,
+        tempSecurityPin,
         departmentName: "Network Engineer",
       });
 
@@ -381,6 +468,7 @@ export const createDepartmentalAdmin = async (req, res) => {
       email,
       department: departmentDoc._id,
       password: hashedPassword,
+      securityPin: hashedSecurityPin,
       isFirstLogin: true,
       ...(validatedLocations.length > 0 && {
         locations: validatedLocations,
@@ -393,6 +481,7 @@ export const createDepartmentalAdmin = async (req, res) => {
       name,
       email,
       tempPassword,
+      tempSecurityPin,
       departmentName: departmentDoc.name,
     });
 
@@ -427,7 +516,7 @@ export const getAllDepartmentalAdmin = async (req, res) => {
       .populate("department", "name description")
       .populate("itDepartmentAdmin", "name email")
       .populate("locations.building", "name") // populate building inside locations
-      .select("-password");
+      .select("-password -securityPin");
 
     res.status(200).json({
       message: "Departmental admins fetched successfully.",
@@ -446,7 +535,7 @@ export const getAllNetworkEngineers = async (req, res) => {
     const engineers = await NetworkEngineer.find({})
       .populate("itDepartmentAdmin", "name email")
       .populate("locations.building", "name")
-      .select("-password");
+      .select("-password -securityPin");
 
     res.status(200).json({
       message: "Network engineers fetched successfully.",
@@ -639,7 +728,7 @@ export const updateDepartmentalAdmin = async (req, res) => {
       .populate("department", "name description")
       .populate("itDepartmentAdmin", "name email")
       .populate("locations.building", "name")
-      .select("-password");
+      .select("-password -securityPin");
 
     return res.status(200).json({
       message: "Departmental admin updated successfully.",

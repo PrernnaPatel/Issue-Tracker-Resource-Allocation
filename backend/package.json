@@ -8,6 +8,8 @@
     "dev": "nodemon src/server.js",
     "backfill:manual-assignments": "node scripts/backfill-manual-assignments.js",
     "migrate:network-engineers": "node scripts/migrate-network-engineers.js",
+    "set:super-admin-pin": "node src/scripts/setSuperAdminPin.js",
+    "set:super-admin-credentials": "node src/scripts/setSuperAdminPin.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

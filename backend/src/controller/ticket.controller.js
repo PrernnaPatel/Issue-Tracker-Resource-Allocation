@@ -127,6 +127,10 @@ export const raiseTicket = async (req, res) => {
         priority: new_ticket.priority,
         from: employee.name || "Unknown",
         raisedAt: new Date().toLocaleString(),
+        buildingId: employee.building?._id || employee.building,
+        buildingName: employee.building?.name,
+        floor: employee.floor,
+        lab_no: employee.lab_no,
       };
       if (isNetworkEngineerTarget) {
         io.to(`network-${employee.building._id}-${employee.floor}`).emit(
@@ -710,29 +714,37 @@ export const getUnreadTicketUpdates = async (req, res) => {
 
       const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
       locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
-    } else if (isITAdmin && userType !== "network-engineer") {
+    } else {
       const admin = await DepartmentalAdmin.findById(adminId);
-      if (!admin || !Array.isArray(admin.locations) || admin.locations.length === 0) {
-        return res.status(200).json({ updatedTickets: [], totalUpdatedTickets: 0 });
-      }
+      if (admin && Array.isArray(admin.locations) && admin.locations.length > 0) {
+        const useStrictLocation = isITAdmin && userType !== "network-engineer";
+        const locationFilters = admin.locations.map((loc) => {
+          const buildingId =
+            typeof loc.building === "object" ? loc.building?._id : loc.building;
+          if (!buildingId) return null;
 
-      const locationFilters = admin.locations.map((loc) => {
-        const buildingId =
-          typeof loc.building === "object" ? loc.building?._id : loc.building;
-        const labs = Array.isArray(loc.labs) ? loc.labs : [];
-        const normalizedLabs = labs.flatMap((lab) => {
-          const asString = String(lab);
-          const asNumber = Number(lab);
-          return Number.isNaN(asNumber) ? [asString] : [asNumber, asString];
-        });
-        return {
-          building: buildingId,
-          floor: loc.floor,
-          lab_no: { $in: normalizedLabs },
-        };
-      });
-      const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
-      locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
+          if (!useStrictLocation) {
+            return { building: buildingId };
+          }
+
+          const labs = Array.isArray(loc.labs) ? loc.labs : [];
+          const normalizedLabs = labs.flatMap((lab) => {
+            const asString = String(lab);
+            const asNumber = Number(lab);
+            return Number.isNaN(asNumber) ? [asString] : [asNumber, asString];
+          });
+          return {
+            building: buildingId,
+            floor: loc.floor,
+            lab_no: { $in: normalizedLabs },
+          };
+        }).filter(Boolean);
+
+        if (locationFilters.length > 0) {
+          const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
+          locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
+        }
+      }
     }
 
     // Get tickets assigned to this admin or department
@@ -741,7 +753,7 @@ export const getUnreadTicketUpdates = async (req, res) => {
         { assigned_to: adminId },
         {
           to_department: scopedDepartment._id,
-          ...(isNetworkEngineer && { raised_by: { $in: locationEmployeeIds } }),
+          ...(locationEmployeeIds && { raised_by: { $in: locationEmployeeIds } }),
           status: { $in: ["pending", "in_progress"] },
         },
       ],
@@ -866,29 +878,37 @@ export const markAllTicketsAsViewed = async (req, res) => {
 
       const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
       locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
-    } else if (isITAdmin && userType !== "network-engineer") {
+    } else {
       const admin = await DepartmentalAdmin.findById(adminId);
-      if (!admin || !Array.isArray(admin.locations) || admin.locations.length === 0) {
-        return res.status(200).json({ message: "All tickets marked as viewed.", updatedCount: 0 });
-      }
+      if (admin && Array.isArray(admin.locations) && admin.locations.length > 0) {
+        const useStrictLocation = isITAdmin && userType !== "network-engineer";
+        const locationFilters = admin.locations.map((loc) => {
+          const buildingId =
+            typeof loc.building === "object" ? loc.building?._id : loc.building;
+          if (!buildingId) return null;
 
-      const locationFilters = admin.locations.map((loc) => {
-        const buildingId =
-          typeof loc.building === "object" ? loc.building?._id : loc.building;
-        const labs = Array.isArray(loc.labs) ? loc.labs : [];
-        const normalizedLabs = labs.flatMap((lab) => {
-          const asString = String(lab);
-          const asNumber = Number(lab);
-          return Number.isNaN(asNumber) ? [asString] : [asNumber, asString];
-        });
-        return {
-          building: buildingId,
-          floor: loc.floor,
-          lab_no: { $in: normalizedLabs },
-        };
-      });
-      const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
-      locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
+          if (!useStrictLocation) {
+            return { building: buildingId };
+          }
+
+          const labs = Array.isArray(loc.labs) ? loc.labs : [];
+          const normalizedLabs = labs.flatMap((lab) => {
+            const asString = String(lab);
+            const asNumber = Number(lab);
+            return Number.isNaN(asNumber) ? [asString] : [asNumber, asString];
+          });
+          return {
+            building: buildingId,
+            floor: loc.floor,
+            lab_no: { $in: normalizedLabs },
+          };
+        }).filter(Boolean);
+
+        if (locationFilters.length > 0) {
+          const matchingEmployees = await Employee.find({ $or: locationFilters }).select("_id");
+          locationEmployeeIds = matchingEmployees.map((emp) => emp._id);
+        }
+      }
     }
 
     const ticketQuery = {

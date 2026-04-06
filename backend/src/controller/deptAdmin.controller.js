@@ -14,12 +14,18 @@ import InventorySystem from "../models/InventorySystem.model.js";
 import { Building } from "../models/Building.model.js";
 import { updateBuilding } from "./admin.controller.js";
 import { logAction } from "../utils/logAction.js";
+import {
+  compareSecurityPin,
+  hashSecurityPin,
+  isValidSecurityPin,
+} from "../utils/securityPin.js";
 
 const otpDeliveryMode = (process.env.OTP_DELIVERY || "email").toLowerCase();
 const shouldPrintOtp = otpDeliveryMode === "console" || otpDeliveryMode === "both";
 
 const NETWORK_ENGINEER_DEPARTMENT_NAME = "network engineer";
 const IT_DEPARTMENT_REGEX = /^it(\s+department)?$/i;
+const DEFAULT_LEGACY_FIRST_LOGIN_PIN = "123456";
 
 const isNetworkEngineerDepartment = (departmentName = "") =>
   departmentName.toLowerCase().trim() === NETWORK_ENGINEER_DEPARTMENT_NAME;
@@ -50,12 +56,57 @@ const getTicketScopeDepartment = async (departmentName) => {
   };
 };
 
+const buildDeptAdminLoginResponse = async (account, { admin, engineer }) => {
+  const isNetworkEngineer = Boolean(engineer);
+  const now = moment().tz("Asia/Kolkata");
+  const midnight = moment().tz("Asia/Kolkata").endOf("day");
+  const secondsUntilMidnight = midnight.diff(now, "seconds");
+
+  const token = jwt.sign(
+    {
+      id: account._id,
+      department: isNetworkEngineer ? "Network Engineer" : admin?.department?.name || "",
+      email: account.email,
+      role: "departmental-admin",
+      userType: isNetworkEngineer ? "network-engineer" : "departmental-admin",
+      isFirstLogin: account.isFirstLogin,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: secondsUntilMidnight }
+  );
+
+  return {
+    message: account.isFirstLogin
+      ? "Temporary credentials verified. Update password and security pin."
+      : "Login successful",
+    token,
+    admin: {
+      _id: account._id,
+      name: account.name,
+      email: account.email,
+      department: isNetworkEngineer ? { name: "Network Engineer" } : admin?.department,
+      itDepartmentAdmin: isNetworkEngineer ? engineer?.itDepartmentAdmin : undefined,
+      locations: isNetworkEngineer ? engineer?.locations : undefined,
+      isFirstLogin: account.isFirstLogin,
+      isNetworkEngineer,
+    },
+  };
+};
+
 export const deptAdminLoginRequestOtp = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, securityPin } = req.body;
 
   try {
-    const admin = await DepartmentalAdmin.findOne({ email });
-    const engineer = admin ? null : await NetworkEngineer.findOne({ email });
+    const admin = await DepartmentalAdmin.findOne({ email }).populate("department");
+    const engineer = admin
+      ? null
+      : await NetworkEngineer.findOne({ email })
+          .populate({
+            path: "itDepartmentAdmin",
+            select: "name email department",
+            populate: { path: "department", select: "name" },
+          })
+          .populate("locations.building", "name code");
     const account = admin || engineer;
     const isNetworkEngineer = Boolean(engineer);
 
@@ -65,17 +116,48 @@ export const deptAdminLoginRequestOtp = async (req, res) => {
 
     const isPasswordValid = await bcrypt.compare(password, account.password);
     if (!isPasswordValid) {
+      await logAction({
+        action: "FAILED_LOGIN",
+        performedBy: account?._id || null,
+        description: `Failed login attempt with email "${email}" (invalid password).`,
+      });
       return res.status(401).json({ message: "Invalid Credentials." });
     }
-    await logAction({
-      action: "FAILED_LOGIN",
-      performedBy: account?._id || null,
-      description: `Failed login attempt with email "${email}" (invalid password).`,
-    });
+    if (!isValidSecurityPin(securityPin)) {
+      return res.status(400).json({ message: "Security pin must be 6 digits." });
+    }
+
+    if (!account.securityPin) {
+      account.securityPin = DEFAULT_LEGACY_FIRST_LOGIN_PIN;
+      await account.save();
+    }
+
+    const hasLegacyPlainPin =
+      typeof account.securityPin === "string" &&
+      !account.securityPin.startsWith("$2");
+
+    const isSecurityPinValid = hasLegacyPlainPin
+      ? account.securityPin === securityPin
+      : await compareSecurityPin(securityPin, account.securityPin);
+
+    if (isSecurityPinValid && hasLegacyPlainPin) {
+      account.securityPin = securityPin;
+      await account.save();
+    }
+    if (!isSecurityPinValid) {
+      await logAction({
+        action: "FAILED_LOGIN",
+        performedBy: account?._id || null,
+        description: `Failed login attempt with email "${email}" (invalid security pin).`,
+      });
+      return res.status(401).json({ message: "Invalid Credentials." });
+    }
+
+    /*
+    Previous OTP-based departmental admin login flow retained for reference.
     const nowIST = moment().tz("Asia/Kolkata");
     const todayDateIST = nowIST.format("YYYY-MM-DD");
 
-    //If first time login
     if (account.isFirstLogin) {
       await OTP.deleteMany({ email, role: "departmental-admin" });
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -92,8 +174,6 @@ export const deptAdminLoginRequestOtp = async (req, res) => {
       });
     }
 
-    //Not first Login
-
     const existingOtp = await OTP.findOne({ email });
 
     if (existingOtp) {
@@ -106,17 +186,14 @@ export const deptAdminLoginRequestOtp = async (req, res) => {
           console.log(`[OTP:LOGIN] email=${email} otp=${existingOtp.otp}`);
         }
 
-        // Reuse today's OTP
         return res.status(200).json({
           message: "Use the OTP sent to your mail",
         });
       } else {
-        // Delete old OTP
         await OTP.deleteOne({ email });
       }
     }
 
-    // Generate and save new OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     await OTP.create({
       email,
@@ -125,22 +202,23 @@ export const deptAdminLoginRequestOtp = async (req, res) => {
       createdAt: nowIST.toDate(),
     });
 
-    // Send OTP via email
     await sendOtp(email, otp);
+    */
+
+    const response = await buildDeptAdminLoginResponse(account, { admin, engineer });
+
     await logAction({
-      action: "LOGIN_OTP_REQUEST",
+      action: "LOGIN_SUCCESS",
       performedBy: account._id,
-      description: `OTP login requested by ${isNetworkEngineer ? "network engineer" : "departmental admin"} (${email}).`,
+      description: `${isNetworkEngineer ? "Network Engineer" : "Departmental Admin"} (${account.email}) logged in successfully via password and security pin.`,
     });
-    return res.status(200).json({
-      message: "OTP sent to your email",
-      isFirstLogin: false,
-    });
+
+    return res.status(200).json(response);
   } catch (e) {
-    console.error("Dept admin OTP login error:", e);
+    console.error("Dept admin login error:", e);
     return res
       .status(500)
-      .json({ message: "Login OTP request failed", error: e.message });
+      .json({ message: "Login failed", error: e.message });
   }
 };
 
@@ -187,118 +265,19 @@ const checkOtpRateLimit = async (email) => {
 
 //Verify OTP and login
 export const deptAdminVerifyOtpAndLogin = async (req, res) => {
+  /*
+  Previous OTP verification flow retained for reference.
   const { email, otp } = req.body;
+  ...
+  */
 
-  try {
-    // 1. Rate limit check
-    await checkOtpRateLimit(email);
-
-    // 2. Find the OTP generated today
-    const startOfDay = moment().startOf("day").toDate();
-    const endOfDay = moment().endOf("day").toDate();
-
-    const record = await OTP.findOne({
-      email,
-      role: "departmental-admin",
-      createdAt: { $gte: startOfDay, $lte: endOfDay },
-    });
-
-    if (!record || record.otp !== otp) {
-      return res.status(400).json({ message: "Invalid or expired OTP" });
-    }
-
-    // 3. Fetch admin / engineer and check existence
-    const admin = await DepartmentalAdmin.findOne({ email }).populate("department");
-    const engineer = admin
-      ? null
-      : await NetworkEngineer.findOne({ email })
-          .populate({
-            path: "itDepartmentAdmin",
-            select: "name email department",
-            populate: { path: "department", select: "name" },
-          })
-          .populate("locations.building", "name code");
-    const account = admin || engineer;
-    const isNetworkEngineer = Boolean(engineer);
-
-    if (!account) {
-      return res.status(404).json({ message: "Departmental admin not found" });
-    }
-
-    // 4. If it's first login, check OTP expiry (5 min)
-    if (account.isFirstLogin) {
-      const otpCreated = moment(record.createdAt);
-      const now = moment();
-      const diffInMinutes = now.diff(otpCreated, "minutes");
-
-      if (diffInMinutes > 5) {
-        await OTP.deleteMany({ email }); // Clean up expired OTPs
-        return res
-          .status(400)
-          .json({ message: "OTP expired. Please request a new one." });
-      }
-
-      // Clean up OTP after first login
-      await OTP.deleteMany({ email });
-    }
-
-    // 5. Generate token (valid until midnight IST)
-    const now = moment().tz("Asia/Kolkata");
-    const midnight = moment().tz("Asia/Kolkata").endOf("day");
-    const secondsUntilMidnight = midnight.diff(now, "seconds");
-
-    const token = jwt.sign(
-      {
-        id: account._id,
-        department: isNetworkEngineer
-          ? "Network Engineer"
-          : admin?.department?.name || "",
-        email: account.email,
-        role: "departmental-admin",
-        userType: isNetworkEngineer ? "network-engineer" : "departmental-admin",
-        isFirstLogin: account.isFirstLogin,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: secondsUntilMidnight }
-    );
-
-    // 6. Clear failed OTP attempts after successful login
-    await OtpAttempt.deleteOne({ email });
-
-    await logAction({
-      action: "LOGIN_SUCCESS",
-      performedBy: account._id,
-      description: `${isNetworkEngineer ? "Network Engineer" : "Departmental Admin"} (${account.email}) logged in successfully via OTP.`,
-    });
-
-    // 7. Respond with token and user details
-    return res.status(200).json({
-      message: "OTP verified, login successful",
-      token,
-      admin: {
-        _id: account._id,
-        name: account.name,
-        email: account.email,
-        department: isNetworkEngineer
-          ? { name: "Network Engineer" }
-          : admin?.department,
-        itDepartmentAdmin: isNetworkEngineer ? engineer?.itDepartmentAdmin : undefined,
-        locations: isNetworkEngineer ? engineer?.locations : undefined,
-        isFirstLogin: account.isFirstLogin,
-        isNetworkEngineer,
-      },
-    });
-  } catch (e) {
-    console.error("OTP verification error:", e);
-    return res.status(500).json({
-      message: "OTP verification failed",
-      error: e.message,
-    });
-  }
+  return res.status(410).json({
+    message: "OTP based login has been disabled. Use password and security pin.",
+  });
 };
 
 export const changePassword = async (req, res) => {
-  const { email, newPassword } = req.body;
+  const { email, newPassword, newSecurityPin } = req.body;
 
   try {
     const admin = await DepartmentalAdmin.findOne({ email });
@@ -309,20 +288,26 @@ export const changePassword = async (req, res) => {
       return res.status(404).json({ message: "Departmental Admin not found." });
     }
 
+    if (!isValidSecurityPin(newSecurityPin)) {
+      return res.status(400).json({ message: "Security pin must be 6 digits." });
+    }
+
     const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const hashedSecurityPin = await hashSecurityPin(newSecurityPin);
 
     account.password = hashedPassword;
+    account.securityPin = hashedSecurityPin;
     account.isFirstLogin = false;
     await account.save();
 
     await logAction({
       action: "PASSWORD_CHANGED",
       performedBy: account._id,
-      description: `${isNetworkEngineer ? "Network Engineer" : "Departmental Admin"} (${account.email}) changed password after first login.`,
+      description: `${isNetworkEngineer ? "Network Engineer" : "Departmental Admin"} (${account.email}) changed password and security pin after first login.`,
     });
 
     return res.status(200).json({
-      message: "Password updated successfully. Please Login again.    ",
+      message: "Password and security pin updated successfully. Please login again.",
     });
   } catch (e) {
     return res.status(500).json({
@@ -347,7 +332,7 @@ export const getLoggedInDepartmentalAdmin = async (req, res) => {
           populate: { path: "department", select: "name" },
         })
         .populate("locations.building", "name code")
-        .select("-password");
+        .select("-password -securityPin");
       isNetworkEngineer = true;
     } else {
       admin = await DepartmentalAdmin.findById(adminId)
@@ -358,7 +343,7 @@ export const getLoggedInDepartmentalAdmin = async (req, res) => {
           populate: { path: "department", select: "name" },
         })
         .populate("locations.building", "name code")
-        .select("-password");
+        .select("-password -securityPin");
     }
 
     if (!admin) {
@@ -370,7 +355,7 @@ export const getLoggedInDepartmentalAdmin = async (req, res) => {
           populate: { path: "department", select: "name" },
         })
         .populate("locations.building", "name code")
-        .select("-password");
+        .select("-password -securityPin");
       isNetworkEngineer = Boolean(admin);
     }
 
@@ -438,7 +423,7 @@ export const getNetworkEngineersForDeptAdmin = async (req, res) => {
     })
       .populate("itDepartmentAdmin", "name email")
       .populate("locations.building", "name")
-      .select("-password")
+      .select("-password -securityPin")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({ engineers });
@@ -452,7 +437,7 @@ export const getNetworkEngineersForDeptAdmin = async (req, res) => {
 };
 
 export const changePasswordWithCurrent = async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
+  const { currentPassword, newPassword, currentSecurityPin, newSecurityPin } = req.body;
   const adminId = req.user?.id;
 
   if (!currentPassword || !newPassword) {
@@ -475,8 +460,31 @@ export const changePasswordWithCurrent = async (req, res) => {
       return res.status(401).json({ message: "Current password is incorrect." });
     }
 
+    if (currentSecurityPin || newSecurityPin) {
+      if (!currentSecurityPin || !newSecurityPin) {
+        return res.status(400).json({
+          message: "Current security pin and new security pin are both required.",
+        });
+      }
+
+      if (!isValidSecurityPin(newSecurityPin)) {
+        return res.status(400).json({ message: "Security pin must be 6 digits." });
+      }
+
+      const isCurrentPinValid = await compareSecurityPin(
+        currentSecurityPin,
+        account.securityPin
+      );
+      if (!isCurrentPinValid) {
+        return res.status(401).json({ message: "Current security pin is incorrect." });
+      }
+    }
+
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     account.password = hashedPassword;
+    if (newSecurityPin) {
+      account.securityPin = await hashSecurityPin(newSecurityPin);
+    }
     account.isFirstLogin = false;
     await account.save();
 
@@ -549,10 +557,8 @@ export const getDepartmentTickets = async (req, res) => {
         adminLocations: adminRecord.locations || [],
       };
 
-      if (isNetworkEngineer || isITAdmin) {
-        if (!hasLocations) {
-          return res.status(200).json(debug ? { tickets: [], debugInfo } : { tickets: [] });
-        }
+      if (hasLocations) {
+        const useStrictLocation = isNetworkEngineer || isITAdmin;
 
         // Build OR conditions for all assigned locations
         const locationFilters = await Promise.all(
@@ -574,6 +580,12 @@ export const getDepartmentTickets = async (req, res) => {
               buildingId = loc.building;
             }
 
+            if (!buildingId) return null;
+
+            if (!useStrictLocation) {
+              return { building: buildingId };
+            }
+
             const labs = Array.isArray(loc.labs) ? loc.labs : [];
             const normalizedLabs = labs.flatMap((lab) => {
               const asString = String(lab);
@@ -581,13 +593,11 @@ export const getDepartmentTickets = async (req, res) => {
               return Number.isNaN(asNumber) ? [asString] : [asString, asNumber];
             });
 
-            return buildingId
-              ? {
-                  building: buildingId,
-                  floor: loc.floor,
-                  lab_no: { $in: normalizedLabs },
-                }
-              : null;
+            return {
+              building: buildingId,
+              floor: loc.floor,
+              lab_no: { $in: normalizedLabs },
+            };
           })
         );
 
@@ -597,6 +607,7 @@ export const getDepartmentTickets = async (req, res) => {
           ...debugInfo,
           locationFilters,
           cleanedFiltersCount: cleanedFilters.length,
+          useStrictLocation,
         };
         if (cleanedFilters.length === 0) {
           return res.status(200).json(debug ? { tickets: [], debugInfo } : { tickets: [] });
@@ -712,6 +723,8 @@ export const updateTicketStatus = async (req, res) => {
 
     if (isNetworkEngineerActor) {
       const raisedBy = ticket.raised_by;
+      const isAssignedEngineer =
+        ticket.assigned_to && ticket.assigned_to.toString() === adminId;
       const hasLocationAccess =
         raisedBy &&
         adminRecord.locations.some((loc) => {
@@ -722,7 +735,7 @@ export const updateTicketStatus = async (req, res) => {
           return sameBuilding && sameFloor && sameLab;
         });
 
-      if (!hasLocationAccess) {
+      if (!hasLocationAccess && !isAssignedEngineer) {
         return res.status(403).json({
           message:
             "You are not authorized to update this ticket because it is outside your assigned locations.",

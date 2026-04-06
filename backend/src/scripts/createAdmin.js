@@ -19,6 +19,7 @@ const createAdmin = async () => {
     name: "Super Admin",
     email: "admin@gmail.com",
     password: "abc123",
+    securityPin: "123456",
   });
 
   await admin.save();

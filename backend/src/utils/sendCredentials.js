@@ -19,6 +19,7 @@ export const sendCredentialsEmail = async ({
   name,
   email,
   tempPassword,
+  tempSecurityPin,
   departmentName,
 }) => {
   await transporter.sendMail({
@@ -32,8 +33,9 @@ export const sendCredentialsEmail = async ({
       <ul>
         <li><strong>Email:</strong> ${email}</li>
         <li><strong>Temporary Password:</strong> ${tempPassword}</li>
+        <li><strong>Temporary 6-digit Security PIN:</strong> ${tempSecurityPin}</li>
       </ul>
-      <p>You will be required to enter an OTP sent to your email and change your password on first login.</p>
+      <p>On first login, you will be required to change both your password and your 6-digit security PIN.</p>
       <p>Do not share these credentials with anyone.</p>
       <p>— Issue Tracker Team</p>
   `,

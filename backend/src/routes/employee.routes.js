@@ -19,6 +19,7 @@ import {
   commentOnMyTicket,
   getAttachment,
 } from "../controller/ticket.controller.js";
+import { getEmployeeTicketOptions } from "../controller/ticketOption.controller.js";
 import { sendDepartment } from "../controller/department.controller.js";
 import authMiddleware from "../middleware/auth.middleware.js";
 import upload from "../middleware/multer.middleware.js";
@@ -40,6 +41,7 @@ router.post(
 );
 router.get("/my-tickets", authMiddleware, getMyTickets);
 router.get("/filter-tickets", authMiddleware, filterMyTickets);
+router.get("/ticket-options", authMiddleware, getEmployeeTicketOptions);
 router.get("/all-departments", sendDepartment);
 router.put(
   "/update-ticket/:ticketId",

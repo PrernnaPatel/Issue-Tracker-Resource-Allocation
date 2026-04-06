@@ -11,12 +11,49 @@ import Ticket from "../models/Ticket.model.js";
 import { Building } from "../models/Building.model.js";
 import Department from "../models/Department.model.js";
 import { logAction } from "../utils/logAction.js";
+import Admin from "../models/Admin.model.js";
+import DepartmentalAdmin from "../models/DepartmentalAdmin.model.js";
+import NetworkEngineer from "../models/NetworkEngineer.model.js";
+import {
+  compareSecurityPin,
+  hashSecurityPin,
+  isValidSecurityPin,
+} from "../utils/securityPin.js";
 
 const otpDeliveryMode = (process.env.OTP_DELIVERY || "email").toLowerCase();
 const shouldPrintOtp = otpDeliveryMode === "console" || otpDeliveryMode === "both";
 
 const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MIN = 15;
+const DEFAULT_LEGACY_EMPLOYEE_PIN = "123456";
+
+const buildEmployeeLoginResponse = async (employee) => {
+  const now = moment().tz("Asia/Kolkata");
+  const midnight = moment().tz("Asia/Kolkata").endOf("day");
+  const secondsUntilMidnight = midnight.diff(now, "seconds");
+  const deptName = await Department.findById(employee.department);
+  const token = jwt.sign(
+    {
+      id: employee._id,
+      department: deptName.name,
+      email: employee.email,
+      name: employee.name,
+      role: "employee",
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: secondsUntilMidnight }
+  );
+
+  return {
+    message: "Login Successfull",
+    token,
+    employee: {
+      name: employee.name,
+      email: employee.email,
+      department: deptName.name,
+    },
+  };
+};
 
 //OTP Rate and Limit
 const checkOtpRateLimit = async (email) => {
@@ -63,12 +100,19 @@ export const registerEmployee = async (req, res) => {
       floor,
       lab_no,
       password,
+      securityPin,
     } = req.body;
     //console.log(req.body);
     //Check if employee already exists
-    const existing = await Employee.findOne({ email });
-    if (existing) {
-      return res.status(400).json({ message: "Employee already registered" });
+    const [existingEmployee, existingAdmin, existingDeptAdmin, existingEngineer] =
+      await Promise.all([
+        Employee.findOne({ email }),
+        Admin.findOne({ email }),
+        DepartmentalAdmin.findOne({ email }),
+        NetworkEngineer.findOne({ email }),
+      ]);
+    if (existingEmployee || existingAdmin || existingDeptAdmin || existingEngineer) {
+      return res.status(400).json({ message: "This email is already registered." });
     }
 
     //Department check
@@ -98,8 +142,15 @@ export const registerEmployee = async (req, res) => {
         .json({ message: "Invalid lab no for the selected floor." });
     }
 
+    if (!isValidSecurityPin(securityPin)) {
+      return res
+        .status(400)
+        .json({ message: "Security pin must be exactly 6 digits." });
+    }
+
     //Hash the Password
     const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedSecurityPin = await hashSecurityPin(securityPin);
     //Create new Employee in the database
     const newEmployee = await Employee.create({
       name: name,
@@ -110,6 +161,7 @@ export const registerEmployee = async (req, res) => {
       floor: floor,
       lab_no: lab_no,
       password: hashedPassword,
+      securityPin: hashedSecurityPin,
     });
 
     await logAction({
@@ -126,9 +178,9 @@ export const registerEmployee = async (req, res) => {
   }
 };
 
-//Login check and request OTP
+//Login with password and security pin
 export const loginRequestOtp = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, securityPin } = req.body;
 
   try {
     const employee = await Employee.findOne({ email });
@@ -140,12 +192,35 @@ export const loginRequestOtp = async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({ message: "Invalid Credentials" });
     }
+    if (!isValidSecurityPin(securityPin)) {
+      return res.status(400).json({ message: "Security pin must be 6 digits." });
+    }
 
+    if (!employee.securityPin) {
+      employee.securityPin = DEFAULT_LEGACY_EMPLOYEE_PIN;
+      await employee.save();
+    }
+
+    const hasLegacyPlainPin =
+      typeof employee.securityPin === "string" &&
+      !employee.securityPin.startsWith("$2");
+
+    const isSecurityPinValid = hasLegacyPlainPin
+      ? employee.securityPin === securityPin
+      : await compareSecurityPin(securityPin, employee.securityPin);
+
+    if (isSecurityPinValid && hasLegacyPlainPin) {
+      employee.securityPin = securityPin;
+      await employee.save();
+    }
+    if (!isSecurityPinValid) {
+      return res.status(401).json({ message: "Invalid Credentials" });
+    }
+
+    /*
+    Previous OTP-based login flow retained for reference only.
     const nowIST = moment().tz("Asia/Kolkata");
-    //console.log(nowIST)
     const todayDateIST = nowIST.format("YYYY-MM-DD");
-    //console.log(todayDateIST)
-
     const existingOtp = await OTP.findOne({ email, role: "employee" });
 
     if (existingOtp) {
@@ -158,17 +233,14 @@ export const loginRequestOtp = async (req, res) => {
           console.log(`[OTP:LOGIN] email=${email} otp=${existingOtp.otp}`);
         }
 
-        // Reuse today's OTP
         return res.status(200).json({
           message: "Use the OTP sent to your mail",
         });
       } else {
-        // Delete old OTP
         await OTP.deleteOne({ email, role: "employee" });
       }
     }
 
-    // Generate and save new OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     await OTP.create({
       email,
@@ -176,9 +248,8 @@ export const loginRequestOtp = async (req, res) => {
       role: "employee",
       createdAt: nowIST.toDate(),
     });
-
-    // Send OTP via email
     await sendOtp(email, otp);
+    */
 
     await logAction({
       action: "LOGIN",
@@ -186,13 +257,12 @@ export const loginRequestOtp = async (req, res) => {
       description: `Employee ${employee.name} (${employee.email}) logged in.`,
     });
 
-    return res.status(200).json({
-      message: "OTP sent to your email",
-    });
+    const response = await buildEmployeeLoginResponse(employee);
+    return res.status(200).json(response);
   } catch (e) {
-    console.error("OTP request error:", e);
+    console.error("Employee login error:", e);
     return res.status(500).json({
-      message: "Login OTP request failed",
+      message: "Login failed",
       error: e.message,
     });
   }
@@ -200,6 +270,8 @@ export const loginRequestOtp = async (req, res) => {
 
 //Verify OTP, Login, Token generate
 export const verifyOtpAndLogin = async (req, res) => {
+  /*
+  Previous OTP verification flow retained for reference.
   const { email, otp } = req.body;
 
   try {
@@ -260,6 +332,11 @@ export const verifyOtpAndLogin = async (req, res) => {
       error: e.message,
     });
   }
+  */
+
+  return res.status(410).json({
+    message: "OTP based login has been disabled. Use password and security pin.",
+  });
 };
 
 //Forgot Password OTP request
@@ -545,7 +622,7 @@ export const updateMyProfile = async (req, res) => {
 export const getAllEmployees = async (req, res) => {
   try {
     const employees = await Employee.find()
-      .select("-password")
+      .select("-password -securityPin")
       .populate("building", "name")
       .populate("department", "name");
 
@@ -567,7 +644,7 @@ export const getEmployeeDetails = async (req, res) => {
 
   try {
     const employee = await Employee.findById(id)
-      .select("-password")
+      .select("-password -securityPin")
       .populate("building", "name")
       .populate("department", "name");
     if (!employee) {
